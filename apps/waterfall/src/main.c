@@ -321,12 +321,20 @@ static void draw_header(void)
 }
 
 /*
- * Per pixel: the Wi-Fi channel centred there (0: none; always, for the labels) and, with the
- * overlay on, whether it is inside channel 1, 6 or 11 (20 MHz).
+ * Per pixel: the Wi-Fi channel centred there (0: none; always, for the labels), the Bluetooth
+ * LE advertising channel there (37 to 39, 0: none) and, with the overlay on, whether it is
+ * inside Wi-Fi channel 1, 6 or 11 (20 MHz).
  */
-#define LABEL_H 10 /* label text and tick at the top of the trace */
+#define LABEL_H 10 /* one label row (text and tick); Wi-Fi first, Bluetooth below */
+#define BLE_COLOR RGB565(0, 220, 255)
 static uint8_t ch_at[W];
+static uint8_t ble_at[W];
 static bool ch_band[W];
+
+static const struct {
+	uint8_t ch;
+	int khz;
+} ble_adv[] = {{37, 2402000}, {38, 2426000}, {39, 2480000}};
 
 static int chan_khz(int ch)
 {
@@ -338,7 +346,15 @@ static void build_overlay(void)
 	int span = span_khz(), left = st.view_khz - span / 2;
 
 	memset(ch_at, 0, sizeof(ch_at));
+	memset(ble_at, 0, sizeof(ble_at));
 	memset(ch_band, 0, sizeof(ch_band));
+	for (size_t i = 0; i < ARRAY_SIZE(ble_adv); i++) {
+		int x = (int)(((int64_t)ble_adv[i].khz - left) * W / span);
+
+		if (x >= 0 && x < (int)W) {
+			ble_at[x] = ble_adv[i].ch;
+		}
+	}
 	for (int ch = 1; ch <= 14; ch++) {
 		int x = (int)(((int64_t)chan_khz(ch) - left) * W / span);
 
@@ -385,8 +401,13 @@ static void draw_trace(void)
 
 				if (ch_at[x] != 0 &&
 				    ((y >= LABEL_H - 2U && y < LABEL_H) ||
-				     (st.channels && y >= LABEL_H && (y & 1U) == 0))) {
+				     (st.channels && y >= 2U * LABEL_H && (y & 1U) == 0))) {
 					c = mark;
+				}
+				if (ble_at[x] != 0 &&
+				    ((y >= 2U * LABEL_H - 2U && y < 2U * LABEL_H) ||
+				     (st.channels && y >= 2U * LABEL_H && (y & 1U) == 1))) {
+					c = BLE_COLOR;
 				}
 
 				if (from_bottom < h) {
@@ -415,6 +436,19 @@ static void draw_trace(void)
 				next = lx + 6 * (int)strlen(num) + 1;
 			}
 		}
+		if (y0 == LABEL_H) {
+			for (unsigned int x = 0; x < W; x++) {
+				char name[8];
+				int lx = (int)x - 8; /* "B37" is 17 pixels, centred */
+
+				if (ble_at[x] == 0) {
+					continue;
+				}
+				snprintf(name, sizeof(name), "B%u", ble_at[x]);
+				lx = CLAMP(lx, 0, (int)W - 17);
+				draw_text(fb, (unsigned int)lx, 1, name, BLE_COLOR);
+			}
+		}
 		blit(PSD_Y + y0, rows);
 	}
 }
@@ -434,6 +468,13 @@ static void draw_waterfall(void)
 				for (unsigned int x = 0; x < W; x++) {
 					if (ch_at[x] != 0) {
 						fb[r * W + x] = RGB565(200, 200, 200);
+					}
+				}
+			}
+			if (st.channels && ((y0 + r) % 4U) == 2U) {
+				for (unsigned int x = 0; x < W; x++) {
+					if (ble_at[x] != 0) {
+						fb[r * W + x] = BLE_COLOR;
 					}
 				}
 			}

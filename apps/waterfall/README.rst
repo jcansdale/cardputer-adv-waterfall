@@ -63,9 +63,11 @@ Key     Action
 ======  ===========================================
 
 Wi-Fi channels 1 to 14 are always labelled at the top of the spectrum trace, each number
-centred over a short tick at the channel centre (labels that would collide are skipped). The
-overlay adds dotted lines through the trace and waterfall and tints the 20 MHz of the
-non-overlapping channels 1, 6 and 11 in the trace.
+centred over a short tick at the channel centre (labels that would collide are skipped).
+Below them, the Bluetooth LE advertising channels are labelled ``B37``, ``B38`` and ``B39``
+in cyan (2402, 2426 and 2480 MHz), where BLE devices announce themselves in short bursts. The
+overlay adds dotted lines through the trace and waterfall (cyan for Bluetooth) and tints the
+20 MHz of the non-overlapping Wi-Fi channels 1, 6 and 11 in the trace.
 
 The view centre is limited to 1800 to 2800 MHz. The keys also work typed on the USB console, and every 2 s the console prints a
 ``spec`` line: the view, then the 240 pixels' maximum in dB since the previous line. Every key press is logged with its raw TCA8418 event
