@@ -24,15 +24,30 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/display.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
 
+#include <soc/rtc_cntl_reg.h>
+
 #include <esp_sdr/esp_sdr.h>
 #include <esp_sdr/esp_sdr_dsp.h>
 
 LOG_MODULE_REGISTER(waterfall, LOG_LEVEL_INF);
+
+/*
+ * Firmware that used USB OTG (such as the Cardputer's factory image) leaves the PHY switched
+ * to OTG across resets; give it back to the USB-Serial-JTAG (console, esptool) at boot.
+ */
+static int usj_phy_select(void)
+{
+	REG_SET_BIT(RTC_CNTL_USB_CONF_REG, RTC_CNTL_SW_HW_USB_PHY_SEL);
+	REG_CLR_BIT(RTC_CNTL_USB_CONF_REG, RTC_CNTL_SW_USB_PHY_SEL);
+	return 0;
+}
+SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
 
 #define W          240
 #define H          135
@@ -41,7 +56,7 @@ LOG_MODULE_REGISTER(waterfall, LOG_LEVEL_INF);
 #define PSD_H      30
 #define WF_Y       (PSD_Y + PSD_H)
 #define WF_H       (H - WF_Y)
-#define CHUNK_ROWS 8
+#define CHUNK_ROWS HDR_H /* the header is drawn in one chunk */
 
 #define NFFT      256U
 #define SAMPLES   4096U
