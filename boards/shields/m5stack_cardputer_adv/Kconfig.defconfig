@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+if SHIELD_M5STACK_CARDPUTER_ADV
+
+config DISPLAY
+	default y
+
+config I2C
+	default y
+
+endif # SHIELD_M5STACK_CARDPUTER_ADV

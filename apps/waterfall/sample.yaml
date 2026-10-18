@@ -1,0 +1,19 @@
+sample:
+  name: ESP-SDR waterfall
+  description: On-device spectrum and waterfall on the M5Stack Cardputer-Adv
+common:
+  tags: esp-sdr
+  platform_allow:
+    - m5stack_stamps3/esp32s3/procpu
+  integration_platforms:
+    - m5stack_stamps3/esp32s3/procpu
+  extra_args:
+    - SHIELD=m5stack_cardputer_adv
+  harness: console
+  harness_config:
+    type: multi_line
+    ordered: true
+    regex:
+      - "waterfall: radio ready"
+tests:
+  sample.esp_sdr.waterfall: {}

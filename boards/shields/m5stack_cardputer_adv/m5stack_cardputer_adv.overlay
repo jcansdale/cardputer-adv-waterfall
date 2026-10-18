@@ -1,0 +1,120 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * M5Stack Cardputer-Adv on its Stamp-S3A (m5stack_stamps3/esp32s3/procpu): the 1.14" ST7789V2
+ * (240x135, landscape) on SPI2 and the internal I2C bus (SDA G8, SCL G9) with the TCA8418
+ * keyboard controller at 0x34 (INT G11), the ES8311 codec and the BMI270 IMU. The display
+ * settings follow Zephyr's m5stack_cardputer shield (same panel and pins); the original
+ * Cardputer's 74HC138 keyboard matrix is replaced by the TCA8418, which the app reads over
+ * I2C (alias kbd-i2c). No PSRAM on this module.
+ */
+
+#include <zephyr/dt-bindings/display/panel.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	aliases {
+		/delete-property/ led-strip;
+		kbd-i2c = &i2c0;
+	};
+
+	chosen {
+		zephyr,display = &st7789v;
+	};
+
+	mipi_dbi {
+		compatible = "zephyr,mipi-dbi-spi";
+		spi-dev = <&spi2>;
+		dc-gpios = <&gpio1 2 GPIO_ACTIVE_HIGH>;		/* G34 */
+		reset-gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;	/* G33 */
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		st7789v: st7789v@0 {
+			compatible = "sitronix,st7789v";
+			reg = <0>;
+			mipi-max-frequency = <DT_FREQ_M(20)>;
+			mipi-mode = "MIPI_DBI_MODE_SPI_4WIRE";
+			width = <240>;
+			height = <135>;
+			x-offset = <40>;
+			y-offset = <53>;
+			vcom = <0x28>;
+			gctrl = <0x35>;
+			vrhs = <0x10>;
+			vdvs = <0x20>;
+			mdac = <0x60>;
+			gamma = <0x01>;
+			/* The app writes big-endian RGB565, the panel's byte order. */
+			pixel-format = <PANEL_PIXEL_FORMAT_RGB_565>;
+			lcm = <0x2c>;
+			porch-param = [0c 0c 00 33 33];
+			cmd2en-param = [5a 69 02 00];
+			pwctrl1-param = [a4 a1];
+			pvgam-param = [d0 00 02 07 0a 28 32 44 42 06 0e 12 14 17];
+			nvgam-param = [d0 00 02 07 0a 28 31 54 47 0e 1c 17 1b 1e];
+			ram-param = [00 f0];
+			rgb-param = [40 02 14];
+		};
+	};
+};
+
+/delete-node/ &status_rgb_led;
+
+&pinctrl {
+	/* LCD: SCK G36, CS G37, MOSI G35. */
+	spim2_default: spim2_default {
+		group1 {
+			pinmux = <SPIM2_SCLK_GPIO36>,
+				 <SPIM2_CSEL_GPIO37>;
+		};
+
+		group2 {
+			pinmux = <SPIM2_MOSI_GPIO35>;
+			output-low;
+		};
+	};
+
+	/* Internal I2C: SDA G8, SCL G9. */
+	i2c0_default: i2c0_default {
+		group1 {
+			pinmux = <I2C0_SDA_GPIO8>,
+				 <I2C0_SCL_GPIO9>;
+			bias-pull-up;
+			drive-open-drain;
+			output-high;
+		};
+	};
+};
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+};
+
+/*
+ * The StampS3 board's I2C1 (G11, G12), SPI3 (WS2812 on G21) and MCPWM (G9, G3) collide with
+ * the keyboard interrupt, the SD card and the I2C clock here.
+ */
+&i2c1 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+&mcpwm0 {
+	status = "disabled";
+};
+
+&gpio1 {
+	status = "okay";
+
+	/* LCD backlight, G38. */
+	lcd-backlight {
+		gpio-hog;
+		gpios = <6 GPIO_ACTIVE_HIGH>;
+		output-high;
+	};
+};

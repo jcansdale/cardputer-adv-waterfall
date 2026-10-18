@@ -1,0 +1,7 @@
+shield:
+  name: m5stack_cardputer_adv
+  full_name: M5Stack Cardputer-Adv
+  vendor: m5stack
+  supported_features:
+    - display
+    - i2c

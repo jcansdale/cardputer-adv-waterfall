@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+config SHIELD_M5STACK_CARDPUTER_ADV
+	def_bool $(shields_list_contains,m5stack_cardputer_adv)
