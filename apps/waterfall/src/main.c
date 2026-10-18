@@ -13,6 +13,7 @@
  *   , /   scroll left / right        ; .   zoom in / out (x1 to x8)
  *   j k   frequency -10 / +10 MHz    h     back to 2440 MHz, x1
  *   r     rate 16 / 40 / 80 MS/s     w     Wi-Fi channel overlay on/off
+ *   p     peak hold over PEAK_BURSTS bursts on/off
  *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  */
@@ -64,6 +65,8 @@ SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
 #define NFFT      1024U
 #define SAMPLES   4096U
 #define ZOOM_MAX  8
+/* Wi-Fi is bursty: with peak hold each row is the per-bin maximum over this many bursts. */
+#define PEAK_BURSTS 8
 #define FULLSCALE 512.0f
 #define FLOOR_DB  (-150.0f)
 
@@ -77,7 +80,7 @@ SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
 
 static const struct device *const display = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 
-static float re[NFFT], im[NFFT], window[NFFT], psd[NFFT];
+static float re[NFFT], im[NFFT], window[NFFT], psd[NFFT], peak[NFFT];
 static float tw_cos[NFFT / 2], tw_sin[NFFT / 2];
 static float window_gain;
 
@@ -93,6 +96,7 @@ static struct {
 	int zoom;     /* the screen spans the sample rate / zoom */
 	bool trace_reset;
 	bool channels; /* the 2.4 GHz Wi-Fi channel overlay */
+	bool peak_hold;
 	enum esp_sdr_rate rate;
 	int gain; /* ESP_SDR_RX_GAIN_AUTO or a table index */
 	bool auto_floor;
@@ -103,6 +107,7 @@ static struct {
 	.lo_mhz = FREQ_DEFAULT_MHZ,
 	.view_khz = FREQ_DEFAULT_MHZ * 1000,
 	.zoom = 1,
+	.peak_hold = true,
 	.rate = ESP_SDR_RATE_16MSPS,
 	.gain = ESP_SDR_RX_GAIN_AUTO,
 	.auto_floor = true,
@@ -279,9 +284,9 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d.%03d%s %2uM X%d G:%s %c%d/%d", st.view_khz / 1000,
+	snprintf(line, sizeof(line), "%4d.%03d%s %2uM%c X%d G:%s %c%d/%d", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", (unsigned int)(fs_khz() / 1000),
-		 st.zoom, gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db, (int)st.range_db);
+		 st.peak_hold ? 'P' : ' ', st.zoom, gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db, (int)st.range_db);
 	for (unsigned int k = 0; k < W * HDR_H; k++) {
 		fb[k] = bg;
 	}
@@ -558,7 +563,11 @@ static void handle_key(char k)
 		st.rate = st.rate == ESP_SDR_RATE_16MSPS   ? ESP_SDR_RATE_40MSPS
 			  : st.rate == ESP_SDR_RATE_40MSPS ? ESP_SDR_RATE_80MSPS
 							   : ESP_SDR_RATE_16MSPS;
+		st.dirty_radio = true; /* the analog filters follow the rate */
 		break;
+	case 'p':
+		st.peak_hold = !st.peak_hold;
+		return;
 	case '-':
 		st.auto_floor = false;
 		st.floor_db -= 2.0f;
@@ -604,7 +613,26 @@ static void handle_key(char k)
 
 static void apply_radio(void)
 {
-	int ret = esp_sdr_set_freq(st.lo_mhz);
+	bool wide = st.rate != ESP_SDR_RATE_16MSPS;
+	uint32_t bw_min, bw_max;
+	int ret;
+
+	/*
+	 * The PHY's 20 MHz mode cuts the receiver off at about +-10 MHz; its 40 MHz mode (2)
+	 * passes about +-18 MHz (doc/hardware-quirks.md). Wide rates take that and the widest
+	 * low-pass filter; 16 MS/s keeps the 20 MHz mode with a 16 MHz filter.
+	 */
+	esp_sdr_rx_bandwidth_range(&bw_min, &bw_max);
+	ret = esp_sdr_set_channel_bw(wide ? 2U : 0U);
+	if (ret != 0) {
+		LOG_WRN("channel_bw: %d", ret);
+	}
+	ret = esp_sdr_rx_set_bandwidth(wide ? 0U : CLAMP(16U, bw_min, bw_max));
+	if (ret != 0) {
+		LOG_WRN("rx bandwidth: %d", ret);
+	}
+
+	ret = esp_sdr_set_freq(st.lo_mhz);
 
 	st.tune_warn = ret == -ERANGE;
 	if (ret != 0 && ret != -ERANGE) {
@@ -621,7 +649,8 @@ static void apply_radio(void)
 
 /* ---- spectrum ---- */
 
-static int capture_row(void)
+/* One burst's Welch average into psd; @return the segment count, or a negative error. */
+static int capture_psd(void)
 {
 	struct esp_sdr_rx_burst b;
 	unsigned int segments;
@@ -652,6 +681,30 @@ static int capture_row(void)
 			psd[k] += re[k] * re[k] + im[k] * im[k];
 		}
 	}
+	return (int)segments;
+}
+
+static int capture_row(void)
+{
+	unsigned int bursts = st.peak_hold ? PEAK_BURSTS : 1U;
+	int segments = 0;
+
+	for (unsigned int n = 0; n < bursts; n++) {
+		int ret = capture_psd();
+
+		if (ret < 0) {
+			return ret;
+		}
+		segments = ret;
+		if (n == 0U) {
+			memcpy(peak, psd, sizeof(peak));
+		} else {
+			for (unsigned int k = 0; k < NFFT; k++) {
+				peak[k] = MAX(peak[k], psd[k]);
+			}
+		}
+	}
+	memcpy(psd, peak, sizeof(psd));
 
 	float norm = 1.0f / (FULLSCALE * FULLSCALE * window_gain * (float)segments);
 	float sum = 0.0f;

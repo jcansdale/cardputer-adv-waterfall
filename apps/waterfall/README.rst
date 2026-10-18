@@ -8,11 +8,16 @@ no MicroPython, no LVGL, no PSRAM (the Stamp-S3A has none).
 
 Each row is a Welch average of Hann-windowed 1024-point FFTs over one 4096-sample burst at
 16, 40 or 80 MS/s. The screen shows a view of that span, as wide as the sample rate at x1
-(16, 40 or 80 MHz) down to an eighth of it at x8; at 80 MS/s the edges are likely attenuated
-by the radio's analog filter, sized for 40 MHz Wi-Fi channels; each pixel takes the strongest bin under it. Zooming stretches
+(16, 40 or 80 MHz) down to an eighth of it at x8; the radio's analog filters only pass about
++-10 MHz at 16 MS/s and, in the PHY's 40 MHz mode used at 40 and 80 MS/s, about +-18 MHz,
+so the outer parts of a wide view are attenuated; each pixel takes the strongest bin under it. Zooming stretches
 time as well: each row is drawn zoom pixels tall, so the waterfall runs that much faster.
 Scrolling past the captured span retunes the radio, and the waterfall history is shifted and
 rescaled to stay lined up.
+
+Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by default
+each row is the per-bin maximum over 8 bursts (peak hold, ``P`` in the header); ``p`` turns
+it off for a plain average.
 
 The top line shows the view's centre frequency, rate, zoom, gain and colour scale, with
 frequency ticks under it (taller on whole MHz); then a 30 pixel spectrum trace and the
@@ -51,6 +56,7 @@ Key     Action
 ``]``   colour range +5 dB
 ``a``   automatic colour floor on / off
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
+``p``   peak hold over 8 bursts on / off (on at start)
 ``n``   fixed gain -1
 ``m``   fixed gain +1
 ``g``   gain back to AGC
