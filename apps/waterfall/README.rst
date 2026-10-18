@@ -50,10 +50,15 @@ Key     Action
 ``[``   colour range -5 dB
 ``]``   colour range +5 dB
 ``a``   automatic colour floor on / off
+``w``   2.4 GHz Wi-Fi channel overlay on / off
 ``n``   fixed gain -1
 ``m``   fixed gain +1
 ``g``   gain back to AGC
 ======  ===========================================
+
+The Wi-Fi overlay marks channels 1 to 14 with dotted lines and their numbers (labels that
+would collide are skipped) and tints the 20 MHz of the non-overlapping channels 1, 6 and 11
+in the spectrum trace.
 
 The view centre is limited to 1800 to 2800 MHz. Every key press is logged with its raw TCA8418 event
 on the console, which helps if the key map needs adjusting.

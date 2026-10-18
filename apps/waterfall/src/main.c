@@ -12,7 +12,7 @@
  * Keys (Cardputer arrows are ; . , /):
  *   , /   scroll left / right        ; .   zoom in / out (x1 to x8)
  *   j k   frequency -10 / +10 MHz    h     back to 2440 MHz, x1
- *   r     rate 16 / 40 / 80 MS/s
+ *   r     rate 16 / 40 / 80 MS/s     w     Wi-Fi channel overlay on/off
  *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  */
@@ -92,6 +92,7 @@ static struct {
 	int view_khz; /* the centre of the screen */
 	int zoom;     /* the screen spans the sample rate / zoom */
 	bool trace_reset;
+	bool channels; /* the 2.4 GHz Wi-Fi channel overlay */
 	enum esp_sdr_rate rate;
 	int gain; /* ESP_SDR_RX_GAIN_AUTO or a table index */
 	bool auto_floor;
@@ -309,6 +310,41 @@ static void draw_header(void)
 	blit(0, HDR_H);
 }
 
+/* Overlay per pixel: the channel centred there (0: none), inside 1, 6 or 11 (20 MHz). */
+static uint8_t ch_at[W];
+static bool ch_band[W];
+
+static int chan_khz(int ch)
+{
+	return ch == 14 ? 2484000 : 2407000 + 5000 * ch;
+}
+
+static void build_overlay(void)
+{
+	int span = span_khz(), left = st.view_khz - span / 2;
+
+	memset(ch_at, 0, sizeof(ch_at));
+	memset(ch_band, 0, sizeof(ch_band));
+	if (!st.channels) {
+		return;
+	}
+	for (int ch = 1; ch <= 14; ch++) {
+		int x = (int)(((int64_t)chan_khz(ch) - left) * W / span);
+
+		if (x >= 0 && x < (int)W) {
+			ch_at[x] = (uint8_t)ch;
+		}
+		if (ch == 1 || ch == 6 || ch == 11) {
+			int a = (int)(((int64_t)chan_khz(ch) - 10000 - left) * W / span);
+			int b = (int)(((int64_t)chan_khz(ch) + 10000 - left) * W / span);
+
+			for (int i = MAX(a, 0); i <= MIN(b, (int)W - 1); i++) {
+				ch_band[i] = true;
+			}
+		}
+	}
+}
+
 static unsigned int level(float db)
 {
 	float x = (db - st.floor_db) / st.range_db;
@@ -319,7 +355,9 @@ static unsigned int level(float db)
 static void draw_trace(void)
 {
 	uint16_t bg = RGB565(0, 0, 0), grid = RGB565(40, 40, 40);
+	uint16_t band = RGB565(0, 24, 48), mark = RGB565(110, 110, 110);
 
+	build_overlay();
 	for (unsigned int y0 = 0; y0 < PSD_H; y0 += CHUNK_ROWS) {
 		unsigned int rows = MIN(CHUNK_ROWS, PSD_H - y0);
 
@@ -330,13 +368,38 @@ static void draw_trace(void)
 			for (unsigned int r = 0; r < rows; r++) {
 				unsigned int y = y0 + r; /* 0 at the top */
 				unsigned int from_bottom = PSD_H - 1U - y;
-				uint16_t c = (x == W / 2 || y == PSD_H / 2) ? grid : bg;
+				uint16_t c = (x == W / 2 || y == PSD_H / 2) ? grid
+					     : ch_band[x]                     ? band
+									      : bg;
+
+				if (ch_at[x] != 0 && (y & 1U) == 0) {
+					c = mark;
+				}
 
 				if (from_bottom < h) {
 					c = from_bottom + 1U == h ? RGB565(255, 255, 255)
 								  : palette[lv / 2U];
 				}
 				fb[r * W + x] = c;
+			}
+		}
+		if (y0 == 0 && st.channels) {
+			int next = 0; /* the first free pixel for a label */
+
+			for (unsigned int x = 0; x < W; x++) {
+				char num[4];
+				int lx;
+
+				if (ch_at[x] == 0) {
+					continue;
+				}
+				snprintf(num, sizeof(num), "%u", ch_at[x]);
+				lx = MAX((int)x + 2, 0);
+				if (lx < next || lx + 6 * (int)strlen(num) > (int)W) {
+					continue;
+				}
+				draw_text(fb, (unsigned int)lx, 1, num, RGB565(255, 220, 0));
+				next = lx + 6 * (int)strlen(num) + 1;
 			}
 		}
 		blit(PSD_Y + y0, rows);
@@ -353,6 +416,13 @@ static void draw_waterfall(void)
 
 			for (unsigned int x = 0; x < W; x++) {
 				fb[r * W + x] = palette[src[x]];
+			}
+			if (st.channels && ((y0 + r) % 4U) == 0) {
+				for (unsigned int x = 0; x < W; x++) {
+					if (ch_at[x] != 0) {
+						fb[r * W + x] = RGB565(200, 200, 200);
+					}
+				}
 			}
 		}
 		blit(WF_Y + y0, rows);
@@ -505,6 +575,9 @@ static void handle_key(char k)
 		return;
 	case 'a':
 		st.auto_floor = !st.auto_floor;
+		return;
+	case 'w':
+		st.channels = !st.channels;
 		return;
 	case 'g':
 		st.gain = ESP_SDR_RX_GAIN_AUTO;
