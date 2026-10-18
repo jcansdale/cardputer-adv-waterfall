@@ -211,12 +211,38 @@ static int span_khz(void)
 	return fs_khz() / st.zoom;
 }
 
-/* Re-lay the history for a new view so old rows stay where their frequencies are. */
-static void hist_remap(int old_view_khz, int old_span_khz)
+static uint8_t *hist_row(unsigned int age)
+{
+	return hist[(head + age) % WF_H];
+}
+
+/*
+ * Re-lay the history for a new view so old rows stay where their frequencies are, and
+ * stretch it in time with the zoom (anchored at the newest row), as rows are drawn zoom
+ * pixels tall. In place: zooming in reads rows at or above the one written, so go down
+ * from the bottom; zooming out reads rows at or below, so go up from the top.
+ */
+static void hist_remap(int old_view_khz, int old_span_khz, int old_zoom)
 {
 	static uint8_t tmp[W];
 	int new_span = span_khz();
 	int d = (st.view_khz - new_span / 2) - (old_view_khz - old_span_khz / 2);
+
+	if (st.zoom > old_zoom) {
+		for (int r = WF_H - 1; r > 0; r--) {
+			memcpy(hist_row(r), hist_row(r * old_zoom / st.zoom), W);
+		}
+	} else if (st.zoom < old_zoom) {
+		for (unsigned int r = 1; r < WF_H; r++) {
+			unsigned int src = r * old_zoom / st.zoom;
+
+			if (src < WF_H) {
+				memcpy(hist_row(r), hist_row(src), W);
+			} else {
+				memset(hist_row(r), 0, W);
+			}
+		}
+	}
 
 	for (unsigned int r = 0; r < WF_H; r++) {
 		for (unsigned int c = 0; c < W; c++) {
@@ -433,7 +459,7 @@ static char kbd_poll(void)
 static void handle_key(char k)
 {
 	int gmax = esp_sdr_rx_gain_max();
-	int old_view = st.view_khz, old_span = span_khz();
+	int old_view = st.view_khz, old_span = span_khz(), old_zoom = st.zoom;
 
 	switch (k) {
 	case ',':
@@ -498,7 +524,7 @@ static void handle_key(char k)
 	st.view_khz = CLAMP(st.view_khz, FREQ_MIN_MHZ * 1000, FREQ_MAX_MHZ * 1000);
 	follow_view();
 	if (st.view_khz != old_view || span_khz() != old_span) {
-		hist_remap(old_view, old_span);
+		hist_remap(old_view, old_span, old_zoom);
 	}
 }
 
@@ -596,6 +622,11 @@ static int capture_row(void)
 					     : trace_db[c] + 0.3f * (row_db[c] - trace_db[c]);
 	}
 	st.trace_reset = false;
+	/* Zoomed in, each row is zoom pixels tall: time stretches with frequency. */
+	for (int n = 1; n < st.zoom; n++) {
+		head = (head + WF_H - 1U) % WF_H;
+		memcpy(hist[head], hist_row(1), W);
+	}
 	return 0;
 }
 

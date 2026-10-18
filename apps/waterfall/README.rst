@@ -8,9 +8,10 @@ no MicroPython, no LVGL, no PSRAM (the Stamp-S3A has none).
 
 Each row is a Welch average of Hann-windowed 1024-point FFTs over one 4096-sample burst at
 16 MS/s (or 40 MS/s). The screen shows a view of that span, 16 MHz (or 40 MHz) wide at x1
-down to 2 MHz (or 5 MHz) at x8; each pixel takes the strongest bin under it. Scrolling past
-the captured span retunes the radio, and the waterfall history is shifted and rescaled to
-stay lined up with frequency.
+down to 2 MHz (or 5 MHz) at x8; each pixel takes the strongest bin under it. Zooming stretches
+time as well: each row is drawn zoom pixels tall, so the waterfall runs that much faster.
+Scrolling past the captured span retunes the radio, and the waterfall history is shifted and
+rescaled to stay lined up.
 
 The top line shows the view's centre frequency, rate, zoom, gain and colour scale, with
 frequency ticks under it (taller on whole MHz); then a 30 pixel spectrum trace and the
