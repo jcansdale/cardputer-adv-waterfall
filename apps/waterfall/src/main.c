@@ -361,8 +361,15 @@ static void draw_scale(void)
 			}
 		}
 	}
-	/* Centre marker. */
-	fb[(SCALE_H - 1) * W + W / 2] = RGB565(255, 0, 0);
+	/* The view centre (white) and the tuning centre, the LO artefact (red). */
+	fb[(SCALE_H - 1) * W + W / 2] = RGB565(255, 255, 255);
+	int lo_x = (int)(((int64_t)st.lo_mhz * 1000 - left) * W / span);
+
+	if (lo_x >= 0 && lo_x < (int)W) {
+		for (unsigned int y = SCALE_H - 3U; y < SCALE_H; y++) {
+			fb[y * W + (unsigned int)lo_x] = RGB565(255, 0, 0);
+		}
+	}
 	blit(SCALE_Y, SCALE_H);
 }
 
@@ -373,6 +380,10 @@ static void draw_scale(void)
  * inside Wi-Fi channel 1, 6 or 11 (20 MHz).
  */
 #define LABEL_H 10 /* one label row (text and tick); Wi-Fi first, Bluetooth below */
+/* The 40 MHz PHY mode's analog filters pass about +-18 MHz (doc/hardware-quirks.md). */
+#define PASS_KHZ 18000
+#define DIM(c)   (((c) >> 1) & 0x7befU) /* RGB565 at half brightness */
+static int pass_a, pass_b; /* pixels pass_a to pass_b - 1 are inside the analog filters */
 #define BLE_COLOR RGB565(0, 220, 255)
 static uint8_t ch_at[W];
 static uint8_t ble_at[W];
@@ -392,6 +403,14 @@ static void build_overlay(void)
 {
 	int span = span_khz(), left = st.view_khz - span / 2;
 
+	pass_a = 0;
+	pass_b = W;
+	if (st.rate != ESP_SDR_RATE_16MSPS) {
+		int lo = st.lo_mhz * 1000;
+
+		pass_a = CLAMP((int)(((int64_t)lo - PASS_KHZ - left) * W / span), 0, (int)W);
+		pass_b = CLAMP((int)(((int64_t)lo + PASS_KHZ - left) * W / span) + 1, 0, (int)W);
+	}
 	memset(ch_at, 0, sizeof(ch_at));
 	memset(ble_at, 0, sizeof(ble_at));
 	memset(ch_band, 0, sizeof(ch_band));
@@ -461,7 +480,7 @@ static void draw_trace(void)
 					c = from_bottom + 1U == h ? RGB565(255, 255, 255)
 								  : palette[lv / 2U];
 				}
-				fb[r * W + x] = c;
+				fb[r * W + x] = ((int)x < pass_a || (int)x >= pass_b) ? DIM(c) : c;
 			}
 		}
 		if (y0 == 0) {
@@ -513,7 +532,7 @@ static void draw_help(void)
 		"[  ]   COLOUR RANGE",
 		"P      PEAK HOLD",
 		"W      CHANNEL LINES",
-		"",
+		"RED MARK: TUNING CENTRE ARTEFACT",
 		"YELLOW 1-14: WI-FI CHANNELS",
 		"CYAN B37-39: BLUETOOTH LE ADVERTISING",
 	};
@@ -543,7 +562,9 @@ static void draw_waterfall(void)
 			const uint8_t *src = hist[(head + y0 + r) % WF_H];
 
 			for (unsigned int x = 0; x < W; x++) {
-				fb[r * W + x] = palette[src[x]];
+				uint16_t c = palette[src[x]];
+
+				fb[r * W + x] = ((int)x < pass_a || (int)x >= pass_b) ? DIM(c) : c;
 			}
 			if (st.channels && ((y0 + r) % 4U) == 0) {
 				for (unsigned int x = 0; x < W; x++) {

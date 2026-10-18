@@ -20,8 +20,11 @@ each row is the per-bin maximum over 8 bursts (peak hold, ``P`` in the header); 
 it off for a plain average.
 
 The top line shows the view's centre frequency, rate, zoom, gain and colour scale; under
-it a frequency scale with ticks (taller on whole MHz, red at the centre) and their values
-in MHz where they fit; then a 30 pixel spectrum trace and the
+it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
+fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
+which has a narrow artefact of its own (LO leakage, patched over) to ignore. At 40 and
+80 MS/s the trace and waterfall are dimmed beyond about 18 MHz either side of it, where the
+analog filters cut reception off. Below come a 30 pixel spectrum trace and the
 waterfall, newest row on top. A ``!`` after the frequency means the PLL reported the
 frequency outside its tuning window (``-ERANGE``).
 
