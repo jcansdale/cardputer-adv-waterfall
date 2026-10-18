@@ -22,7 +22,11 @@ it off for a plain average.
 The top line shows the view's centre frequency, rate, zoom, gain and colour scale; under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
 fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
-which has a narrow artefact of its own (LO leakage, patched over) to ignore. At 40 and
+which has a narrow artefact of its own (LO leakage, patched over) to ignore. Magenta marks
+are the board's own clock harmonics: steady, narrow carriers exactly on multiples of the
+40 MHz crystal and the 48 MHz USB clock (2352, 2360, 2400, 2440, 2448 and 2496 MHz measured; 2448 on battery too);
+``x`` patches them over with the neighbouring level (``X`` in the header), which would also hide
+any real signal on them, so it starts off. At 40 and
 80 MS/s the trace and waterfall are dimmed beyond about 18 MHz either side of it, where the
 analog filters cut reception off. Below come a 30 pixel spectrum trace and the
 waterfall, newest row on top. A ``!`` after the frequency means the PLL reported the
@@ -63,6 +67,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``a``   automatic colour floor on / off
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
 ``p``   peak hold over 8 bursts on / off (on at start)
+``x``   hide the board's clock harmonics on / off (off at start)
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
 ``m``   fixed gain +1
 ``g``   AGC

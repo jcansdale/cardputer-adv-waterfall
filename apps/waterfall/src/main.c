@@ -16,6 +16,7 @@
  *   p     peak hold over PEAK_BURSTS bursts on/off
  *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
+ *   x     hide the board's own clock harmonics on/off
  */
 
 #include <ctype.h>
@@ -103,6 +104,7 @@ static struct {
 	bool trace_reset;
 	bool channels; /* the 2.4 GHz Wi-Fi channel overlay */
 	bool peak_hold;
+	bool hide_spurs; /* patch over the board's clock harmonics */
 	enum esp_sdr_rate rate;
 	int gain; /* ESP_SDR_RX_GAIN_AUTO or a table index */
 	bool help;       /* the key help covers the screen */
@@ -124,6 +126,20 @@ static struct {
 	.range_db = 40.0f,
 	.dirty_radio = true,
 };
+
+/*
+ * The board hears its own clocks: steady carriers exactly on multiples of the 40 MHz crystal
+ * and of the 48 MHz USB clock (measured at 2352, 2360, 2400, 2440, 2448 and 2496 MHz).
+ */
+static bool is_spur_khz(int khz)
+{
+	return khz % 40000 == 0 || khz % 48000 == 0;
+}
+
+/* Calls fn(khz) for each harmonic from a to b kHz. */
+#define FOR_EACH_SPUR(a, b, khz)                                                              \
+	for (int khz = ((a) + 7999) / 8000 * 8000; khz <= (b); khz += 8000)                    \
+		if (is_spur_khz(khz))
 
 /* 5x7 font, ASCII 0x20 to 0x5d, columns LSB on top. */
 static const uint8_t font5x7[][5] = {
@@ -294,9 +310,9 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d.%03d%s %2uM%c X%d G:%s %c%d/%d", st.view_khz / 1000,
+	snprintf(line, sizeof(line), "%4d.%03d%s %2uM%c%c X%d G:%s %c%d/%d", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", (unsigned int)(fs_khz() / 1000),
-		 st.peak_hold ? 'P' : ' ', st.zoom, gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db, (int)st.range_db);
+		 st.peak_hold ? 'P' : ' ', st.hide_spurs ? 'X' : ' ', st.zoom, gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db, (int)st.range_db);
 	for (unsigned int k = 0; k < W * HDR_H; k++) {
 		fb[k] = bg;
 	}
@@ -359,6 +375,14 @@ static void draw_scale(void)
 				draw_text(fb, (unsigned int)lx, 0, num, fg);
 				next = lx + 6 * len + 2;
 			}
+		}
+	}
+	/* The board's own clock harmonics (magenta). */
+	FOR_EACH_SPUR(left, left + span - 1, khz) {
+		unsigned int x = (unsigned int)((int64_t)(khz - left) * W / span);
+
+		for (unsigned int y = SCALE_H - 3U; y < SCALE_H && x < W; y++) {
+			fb[y * W + x] = RGB565(220, 0, 220);
 		}
 	}
 	/* The view centre (white) and the tuning centre, the LO artefact (red). */
@@ -530,9 +554,9 @@ static void draw_help(void)
 		"N  M   GAIN -/+       G  AGC",
 		"-  =   COLOUR FLOOR   A  AUTO",
 		"[  ]   COLOUR RANGE",
-		"P      PEAK HOLD",
-		"W      CHANNEL LINES",
-		"RED MARK: TUNING CENTRE ARTEFACT",
+		"P      PEAK HOLD      W  CH. LINES",
+		"X      HIDE OWN CLOCK HARMONICS",
+		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
 		"YELLOW 1-14: WI-FI CHANNELS",
 		"CYAN B37-39: BLUETOOTH LE ADVERTISING",
 	};
@@ -746,6 +770,9 @@ static void handle_key(char k)
 	case 'a':
 		st.auto_floor = !st.auto_floor;
 		return;
+	case 'x':
+		st.hide_spurs = !st.hide_spurs;
+		break;
 	case 'w':
 		st.channels = !st.channels;
 		return;
@@ -873,6 +900,25 @@ static int capture_row(void)
 
 	/* The LO leakage and DC residue: the neighbours' mean instead. */
 	psd[0] = psd[1] = psd[NFFT - 1U] = 0.5f * (psd[2] + psd[NFFT - 2U]);
+
+	/* Likewise the clock harmonics, over the Hann window's main lobe. */
+	if (st.hide_spurs) {
+		int lo = st.lo_mhz * 1000, half = fs_khz() / 2;
+
+		FOR_EACH_SPUR(lo - half, lo + half, khz) {
+			int kc = (int)lroundf((float)(khz - lo) * (float)NFFT / (float)fs_khz());
+
+			if (kc >= -2 && kc <= 2) {
+				continue; /* the LO patch has it */
+			}
+			float fill = 0.5f * (psd[(unsigned int)(kc - 3 + (int)NFFT) % NFFT] +
+					     psd[(unsigned int)(kc + 3 + (int)NFFT) % NFFT]);
+
+			for (int k = kc - 2; k <= kc + 2; k++) {
+				psd[(unsigned int)(k + (int)NFFT) % NFFT] = fill;
+			}
+		}
+	}
 
 	/* Pixel edges in shifted bins (NFFT/2 is the LO). */
 	float bin_khz = (float)fs_khz() / (float)NFFT;
