@@ -28,6 +28,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/display.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/uart.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -85,6 +86,9 @@ static float tw_cos[NFFT / 2], tw_sin[NFFT / 2];
 static float window_gain;
 
 static float row_db[W], trace_db[W];
+/* The per-pixel maximum since the last console dump. */
+static float dump_db[W];
+static bool dump_fresh = true;
 static uint8_t hist[WF_H][W];
 static unsigned int head;
 static uint16_t palette[256];
@@ -109,7 +113,8 @@ static struct {
 	.zoom = 1,
 	.peak_hold = true,
 	.rate = ESP_SDR_RATE_16MSPS,
-	.gain = ESP_SDR_RX_GAIN_AUTO,
+	/* Fixed mid gain: the AGC re-levels each burst and flattens bursty Wi-Fi into the noise. */
+	.gain = 42,
 	.auto_floor = true,
 	.floor_db = -100.0f,
 	.range_db = 40.0f,
@@ -749,6 +754,10 @@ static int capture_row(void)
 					     : trace_db[c] + 0.3f * (row_db[c] - trace_db[c]);
 	}
 	st.trace_reset = false;
+	for (unsigned int c = 0; c < W; c++) {
+		dump_db[c] = dump_fresh ? row_db[c] : MAX(dump_db[c], row_db[c]);
+	}
+	dump_fresh = false;
 	/* Zoomed in, each row is zoom pixels tall: time stretches with frequency. */
 	for (int n = 1; n < st.zoom; n++) {
 		head = (head + WF_H - 1U) % WF_H;
@@ -757,8 +766,34 @@ static int capture_row(void)
 	return 0;
 }
 
+/*
+ * One console line: the view, then the 240 pixels' maximum in dB since the last line, for
+ * looking at the spectrum from a host (keys can be typed on the console too).
+ */
+static void dump_spectrum(const struct device *console)
+{
+	static char line[64 + W * 5];
+	int len = snprintf(line, sizeof(line),
+			   "spec lo %d view %d span %d rate %u zoom %d peak %d floor %d:", st.lo_mhz,
+			   st.view_khz, span_khz(), (unsigned int)fs_khz(), st.zoom, st.peak_hold,
+			   (int)st.floor_db);
+
+	for (unsigned int c = 0; c < W && len < (int)sizeof(line) - 8; c++) {
+		len += snprintf(&line[len], sizeof(line) - (size_t)len, " %d",
+				(int)lroundf(MAX(dump_db[c], -999.0f)));
+	}
+	line[len++] = '\n';
+	/* Straight to the UART: one log message per number would overflow the log buffer. */
+	for (int i = 0; i < len; i++) {
+		uart_poll_out(console, (unsigned char)line[i]);
+	}
+	dump_fresh = true;
+}
+
 int main(void)
 {
+	const struct device *const console = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+	uint32_t last_dump_ms;
 	struct display_capabilities caps;
 	uint32_t rows = 0, last_ms;
 	int ret;
@@ -797,11 +832,16 @@ int main(void)
 	printk("waterfall: radio ready, gain table 0..%d\n", esp_sdr_rx_gain_max());
 
 	last_ms = k_uptime_get_32();
+	last_dump_ms = last_ms;
 	for (;;) {
 		char k;
+		unsigned char ck;
 
 		while ((k = kbd_poll()) != 0) {
 			handle_key(k);
+		}
+		while (uart_poll_in(console, &ck) == 0) {
+			handle_key((char)ck);
 		}
 		if (st.dirty_radio) {
 			apply_radio();
@@ -818,6 +858,11 @@ int main(void)
 		rows++;
 
 		uint32_t now = k_uptime_get_32();
+
+		if (now - last_dump_ms >= 2000U) {
+			dump_spectrum(console);
+			last_dump_ms = now;
+		}
 
 		if (now - last_ms >= 5000U) {
 			printk("waterfall: LO %d MHz, view %d kHz x%d, %u rows/s, floor %d dB, "
