@@ -4,7 +4,7 @@
  * Spectrum and waterfall on the M5Stack Cardputer-Adv's 240x135 display, receive only.
  *
  * Each row is a Welch average of Hann-windowed 1024-point FFTs over one 4096-sample burst
- * (16 or 40 MS/s). The 240 pixels show a view (centre, zoom) of that span: each pixel takes
+ * (16, 40 or 80 MS/s). The 240 pixels show a view (centre, zoom) of that span: each pixel takes
  * the strongest bin under it. Scrolling past the captured span retunes the radio. No PSRAM:
  * the history is one byte per pixel (palette index), converted to RGB565 a few rows at a time
  * on the way to the display, and remapped when the view pans or zooms.
@@ -12,7 +12,7 @@
  * Keys (Cardputer arrows are ; . , /):
  *   , /   scroll left / right        ; .   zoom in / out (x1 to x8)
  *   j k   frequency -10 / +10 MHz    h     back to 2440 MHz, x1
- *   r     rate 16 / 40 MS/s
+ *   r     rate 16 / 40 / 80 MS/s
  *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  */
@@ -485,8 +485,9 @@ static void handle_key(char k)
 		st.zoom = 1;
 		break;
 	case 'r':
-		st.rate = st.rate == ESP_SDR_RATE_16MSPS ? ESP_SDR_RATE_40MSPS
-							 : ESP_SDR_RATE_16MSPS;
+		st.rate = st.rate == ESP_SDR_RATE_16MSPS   ? ESP_SDR_RATE_40MSPS
+			  : st.rate == ESP_SDR_RATE_40MSPS ? ESP_SDR_RATE_80MSPS
+							   : ESP_SDR_RATE_16MSPS;
 		break;
 	case '-':
 		st.auto_floor = false;
