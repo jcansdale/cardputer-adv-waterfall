@@ -76,7 +76,9 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 Wi-Fi channels 1 to 14 are always labelled at the top of the spectrum trace, each number
 centred over a short tick at the channel centre (labels that would collide are skipped).
 Below them, the Bluetooth LE advertising channels are labelled ``B37``, ``B38`` and ``B39``
-in cyan (2402, 2426 and 2480 MHz), where BLE devices announce themselves in short bursts. The
+in cyan (2402, 2426 and 2480 MHz), where BLE devices announce themselves in short bursts; small
+dark cyan ticks under them mark the 37 data channels (every 2 MHz from 2404 to 2478 MHz),
+which connected devices hop between. The
 overlay adds dotted lines through the trace and waterfall (cyan for Bluetooth) and tints the
 20 MHz of the non-overlapping Wi-Fi channels 1, 6 and 11 in the trace.
 

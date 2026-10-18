@@ -411,6 +411,7 @@ static int pass_a, pass_b; /* pixels pass_a to pass_b - 1 are inside the analog 
 #define BLE_COLOR RGB565(0, 220, 255)
 static uint8_t ch_at[W];
 static uint8_t ble_at[W];
+static bool ble_data[W]; /* a Bluetooth LE data channel (every 2 MHz, 2404 to 2478) */
 static bool ch_band[W];
 
 static const struct {
@@ -437,6 +438,14 @@ static void build_overlay(void)
 	}
 	memset(ch_at, 0, sizeof(ch_at));
 	memset(ble_at, 0, sizeof(ble_at));
+	memset(ble_data, 0, sizeof(ble_data));
+	for (int khz = 2404000; khz <= 2478000; khz += 2000) {
+		int x = (int)(((int64_t)khz - left) * W / span);
+
+		if (khz != 2426000 && x >= 0 && x < (int)W) {
+			ble_data[x] = true;
+		}
+	}
 	memset(ch_band, 0, sizeof(ch_band));
 	for (size_t i = 0; i < ARRAY_SIZE(ble_adv); i++) {
 		int x = (int)(((int64_t)ble_adv[i].khz - left) * W / span);
@@ -493,6 +502,9 @@ static void draw_trace(void)
 				    ((y >= LABEL_H - 2U && y < LABEL_H) ||
 				     (st.channels && y >= 2U * LABEL_H && (y & 1U) == 0))) {
 					c = mark;
+				}
+				if (ble_data[x] && y == 2U * LABEL_H - 1U) {
+					c = RGB565(0, 110, 128);
 				}
 				if (ble_at[x] != 0 &&
 				    ((y >= 2U * LABEL_H - 2U && y < 2U * LABEL_H) ||
