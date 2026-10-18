@@ -42,6 +42,8 @@ Keys
 ======  ===========================================
 Key     Action
 ======  ===========================================
+Esc     show / hide the key list on screen (the `` ` `` key; any
+        other key also closes it)
 ``,``   scroll left by 1/8 screen (left arrow)
 ``/``   scroll right by 1/8 screen (right arrow)
 ``;``   zoom in, up to x8 (up arrow)

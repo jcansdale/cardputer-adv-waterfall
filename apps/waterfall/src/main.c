@@ -103,6 +103,8 @@ static struct {
 	bool peak_hold;
 	enum esp_sdr_rate rate;
 	int gain; /* ESP_SDR_RX_GAIN_AUTO or a table index */
+	bool help;       /* the key help covers the screen */
+	bool help_drawn;
 	bool auto_floor;
 	float floor_db, range_db;
 	bool tune_warn;
@@ -121,7 +123,7 @@ static struct {
 	.dirty_radio = true,
 };
 
-/* 5x7 font, ASCII 0x20 to 0x5a, columns LSB on top. */
+/* 5x7 font, ASCII 0x20 to 0x5d, columns LSB on top. */
 static const uint8_t font5x7[][5] = {
 	{0x00, 0x00, 0x00, 0x00, 0x00}, {0x00, 0x00, 0x5f, 0x00, 0x00},
 	{0x00, 0x07, 0x00, 0x07, 0x00}, {0x14, 0x7f, 0x14, 0x7f, 0x14},
@@ -152,7 +154,8 @@ static const uint8_t font5x7[][5] = {
 	{0x01, 0x01, 0x7f, 0x01, 0x01}, {0x3f, 0x40, 0x40, 0x40, 0x3f},
 	{0x1f, 0x20, 0x40, 0x20, 0x1f}, {0x7f, 0x20, 0x18, 0x20, 0x7f},
 	{0x63, 0x14, 0x08, 0x14, 0x63}, {0x03, 0x04, 0x78, 0x04, 0x03},
-	{0x61, 0x51, 0x49, 0x45, 0x43},
+	{0x61, 0x51, 0x49, 0x45, 0x43}, {0x00, 0x7f, 0x41, 0x41, 0x00},
+	{0x02, 0x04, 0x08, 0x10, 0x20}, {0x00, 0x41, 0x41, 0x7f, 0x00},
 };
 
 /* ---- display ---- */
@@ -197,7 +200,7 @@ static void draw_text(uint16_t *buf, unsigned int x, unsigned int y, const char 
 	for (; *s != '\0' && x + 5 <= W; s++, x += 6) {
 		int ch = toupper((unsigned char)*s);
 
-		if (ch < 0x20 || ch > 0x5a) {
+		if (ch < 0x20 || ch > 0x5d) {
 			ch = '?';
 		}
 		for (unsigned int col = 0; col < 5; col++) {
@@ -453,6 +456,40 @@ static void draw_trace(void)
 	}
 }
 
+static void draw_help(void)
+{
+	static const char *const lines[] = {
+		"KEYS                  ESC: CLOSE",
+		",  /   SCROLL       (LEFT/RIGHT)",
+		";  .   ZOOM IN/OUT  (UP/DOWN)",
+		"J  K   -10/+10 MHZ    H  HOME",
+		"R      RATE 16/40/80 MS/S",
+		"N  M   GAIN -/+       G  AGC",
+		"-  =   COLOUR FLOOR   A  AUTO",
+		"[  ]   COLOUR RANGE",
+		"P      PEAK HOLD",
+		"W      CHANNEL LINES",
+		"",
+		"YELLOW 1-14: WI-FI CHANNELS",
+		"CYAN B37-39: BLUETOOTH LE ADVERTISING",
+	};
+	uint16_t bg = RGB565(16, 16, 40);
+
+	for (unsigned int y0 = 0; y0 < H; y0 += CHUNK_ROWS) {
+		unsigned int rows = MIN(CHUNK_ROWS, H - y0), line = y0 / CHUNK_ROWS;
+
+		for (unsigned int k = 0; k < W * rows; k++) {
+			fb[k] = bg;
+		}
+		if (line < ARRAY_SIZE(lines) && rows > 8U) {
+			draw_text(fb, 3, 1, lines[line],
+				  line == 0 ? RGB565(255, 220, 0) : RGB565(255, 255, 255));
+		}
+		blit(y0, rows);
+	}
+	st.help_drawn = true;
+}
+
 static void draw_waterfall(void)
 {
 	for (unsigned int y0 = 0; y0 < WF_H; y0 += CHUNK_ROWS) {
@@ -584,6 +621,16 @@ static void handle_key(char k)
 {
 	int gmax = esp_sdr_rx_gain_max();
 	int old_view = st.view_khz, old_span = span_khz(), old_zoom = st.zoom;
+
+	/* Esc is Fn+` on the Cardputer; ` alone works too. Any other key closes the help. */
+	if (k == '`' || k == 0x1b) {
+		st.help = !st.help;
+		st.help_drawn = false;
+		return;
+	}
+	if (st.help) {
+		st.help = false;
+	}
 
 	switch (k) {
 	case ',':
@@ -896,9 +943,13 @@ int main(void)
 			k_msleep(100);
 			continue;
 		}
-		draw_header();
-		draw_trace();
-		draw_waterfall();
+		if (!st.help) {
+			draw_header();
+			draw_trace();
+			draw_waterfall();
+		} else if (!st.help_drawn) {
+			draw_help();
+		}
 		rows++;
 
 		uint32_t now = k_uptime_get_32();
