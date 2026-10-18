@@ -19,8 +19,9 @@ Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by
 each row is the per-bin maximum over 8 bursts (peak hold, ``P`` in the header); ``p`` turns
 it off for a plain average.
 
-The top line shows the view's centre frequency, rate, zoom, gain and colour scale, with
-frequency ticks under it (taller on whole MHz); then a 30 pixel spectrum trace and the
+The top line shows the view's centre frequency, rate, zoom, gain and colour scale; under
+it a frequency scale with ticks (taller on whole MHz, red at the centre) and their values
+in MHz where they fit; then a 30 pixel spectrum trace and the
 waterfall, newest row on top. A ``!`` after the frequency means the PLL reported the
 frequency outside its tuning window (``-ERANGE``).
 

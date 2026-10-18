@@ -57,7 +57,9 @@ SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
 #define W          240
 #define H          135
 #define HDR_H      10
-#define PSD_Y      HDR_H
+#define SCALE_Y    HDR_H
+#define SCALE_H    9 /* MHz numbers over ticks */
+#define PSD_Y      (SCALE_Y + SCALE_H)
 #define PSD_H      30
 #define WF_Y       (PSD_Y + PSD_H)
 #define WF_H       (H - WF_Y)
@@ -299,10 +301,20 @@ static void draw_header(void)
 		fb[k] = bg;
 	}
 	draw_text(fb, 2, 1, line, fg);
+	blit(0, HDR_H);
+}
 
-	/* Frequency ticks, at least 24 pixels apart; taller on whole MHz. */
-	static const int steps[] = {10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000};
-	int span = span_khz(), left = st.view_khz - span / 2, step = steps[ARRAY_SIZE(steps) - 1];
+/*
+ * The frequency scale: ticks at least 24 pixels apart (taller on whole MHz) and, over the
+ * ticks of a coarser step that leaves room for the text, their frequency in MHz.
+ */
+static void draw_scale(void)
+{
+	static const int steps[] = {10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000};
+	int span = span_khz(), left = st.view_khz - span / 2;
+	int step = steps[ARRAY_SIZE(steps) - 1], label = step;
+	uint16_t fg = RGB565(200, 200, 200);
+	int next = 0;
 
 	for (size_t i = 0; i < ARRAY_SIZE(steps); i++) {
 		if (steps[i] * W >= 24 * span) {
@@ -310,18 +322,50 @@ static void draw_header(void)
 			break;
 		}
 	}
-	for (int f = (left + step - 1) / step * step; f < left + span; f += step) {
-		unsigned int x = (unsigned int)((f - left) * W / span);
+	/* Text is 6 pixels a character; "2440.25" at worst, plus a gap. */
+	for (size_t i = 0; i < ARRAY_SIZE(steps); i++) {
+		int chars = steps[i] >= 1000 ? 4 : steps[i] >= 100 ? 6 : 7;
 
-		for (unsigned int y = (f % 1000 == 0) ? HDR_H - 2U : HDR_H - 1U; y < HDR_H && x < W;
-		     y++) {
+		if (steps[i] >= step && steps[i] % step == 0 &&
+		    (int64_t)steps[i] * W >= (int64_t)(6 * chars + 6) * span) {
+			label = steps[i];
+			break;
+		}
+	}
+
+	for (unsigned int k = 0; k < W * SCALE_H; k++) {
+		fb[k] = RGB565(0, 0, 0);
+	}
+	for (int f = (left + step - 1) / step * step; f < left + span; f += step) {
+		unsigned int x = (unsigned int)((int64_t)(f - left) * W / span);
+
+		for (unsigned int y = (f % 1000 == 0) ? SCALE_H - 2U : SCALE_H - 1U;
+		     y < SCALE_H && x < W; y++) {
 			fb[y * W + x] = RGB565(160, 160, 160);
+		}
+		if (f % label == 0) {
+			char num[12];
+			int len, lx;
+
+			if (label >= 1000) {
+				len = snprintf(num, sizeof(num), "%d", f / 1000);
+			} else if (label >= 100) {
+				len = snprintf(num, sizeof(num), "%d.%d", f / 1000, f % 1000 / 100);
+			} else {
+				len = snprintf(num, sizeof(num), "%d.%02d", f / 1000, f % 1000 / 10);
+			}
+			lx = (int)x - (6 * len - 1) / 2;
+			if (lx >= next && lx >= 0 && lx + 6 * len <= (int)W) {
+				draw_text(fb, (unsigned int)lx, 0, num, fg);
+				next = lx + 6 * len + 2;
+			}
 		}
 	}
 	/* Centre marker. */
-	fb[(HDR_H - 1) * W + W / 2] = RGB565(255, 0, 0);
-	blit(0, HDR_H);
+	fb[(SCALE_H - 1) * W + W / 2] = RGB565(255, 0, 0);
+	blit(SCALE_Y, SCALE_H);
 }
+
 
 /*
  * Per pixel: the Wi-Fi channel centred there (0: none; always, for the labels), the Bluetooth
@@ -909,6 +953,7 @@ int main(void)
 	LOG_INF("display %ux%u, format 0x%x", caps.x_resolution, caps.y_resolution,
 		caps.current_pixel_format);
 	draw_header();
+	draw_scale();
 	draw_trace();
 	draw_waterfall();
 	display_blanking_off(display);
@@ -945,6 +990,7 @@ int main(void)
 		}
 		if (!st.help) {
 			draw_header();
+			draw_scale();
 			draw_trace();
 			draw_waterfall();
 		} else if (!st.help_drawn) {
