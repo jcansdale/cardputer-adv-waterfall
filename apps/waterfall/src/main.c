@@ -3,13 +3,16 @@
  *
  * Spectrum and waterfall on the M5Stack Cardputer-Adv's 240x135 display, receive only.
  *
- * Each row is a Welch average of Hann-windowed 256-point FFTs over one 4096-sample burst
- * (16 or 40 MS/s), the middle 240 bins of 256 shown. No PSRAM: the history is one byte per
- * pixel (palette index), converted to RGB565 a few rows at a time on the way to the display.
+ * Each row is a Welch average of Hann-windowed 1024-point FFTs over one 4096-sample burst
+ * (16 or 40 MS/s). The 240 pixels show a view (centre, zoom) of that span: each pixel takes
+ * the strongest bin under it. Scrolling past the captured span retunes the radio. No PSRAM:
+ * the history is one byte per pixel (palette index), converted to RGB565 a few rows at a time
+ * on the way to the display, and remapped when the view pans or zooms.
  *
  * Keys (Cardputer arrows are ; . , /):
- *   , /   frequency -1 / +1 MHz      ; .   frequency +10 / -10 MHz
- *   h     back to 2440 MHz           r     rate 16 / 40 MS/s
+ *   , /   scroll left / right        ; .   zoom in / out (x1 to x8)
+ *   j k   frequency -10 / +10 MHz    h     back to 2440 MHz, x1
+ *   r     rate 16 / 40 MS/s
  *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  */
@@ -58,9 +61,9 @@ SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
 #define WF_H       (H - WF_Y)
 #define CHUNK_ROWS HDR_H /* the header is drawn in one chunk */
 
-#define NFFT      256U
+#define NFFT      1024U
 #define SAMPLES   4096U
-#define BIN0      ((NFFT - W) / 2U)
+#define ZOOM_MAX  8
 #define FULLSCALE 512.0f
 #define FLOOR_DB  (-150.0f)
 
@@ -85,7 +88,10 @@ static uint16_t palette[256];
 static uint16_t fb[W * CHUNK_ROWS];
 
 static struct {
-	int freq_mhz;
+	int lo_mhz;   /* the radio's LO */
+	int view_khz; /* the centre of the screen */
+	int zoom;     /* the screen spans the sample rate / zoom */
+	bool trace_reset;
 	enum esp_sdr_rate rate;
 	int gain; /* ESP_SDR_RX_GAIN_AUTO or a table index */
 	bool auto_floor;
@@ -93,7 +99,9 @@ static struct {
 	bool tune_warn;
 	bool dirty_radio;
 } st = {
-	.freq_mhz = FREQ_DEFAULT_MHZ,
+	.lo_mhz = FREQ_DEFAULT_MHZ,
+	.view_khz = FREQ_DEFAULT_MHZ * 1000,
+	.zoom = 1,
 	.rate = ESP_SDR_RATE_16MSPS,
 	.gain = ESP_SDR_RX_GAIN_AUTO,
 	.auto_floor = true,
@@ -193,6 +201,46 @@ static void draw_text(uint16_t *buf, unsigned int x, unsigned int y, const char 
 	}
 }
 
+static int fs_khz(void)
+{
+	return (int)(esp_sdr_rx_rate_hz(st.rate) / 1000U);
+}
+
+static int span_khz(void)
+{
+	return fs_khz() / st.zoom;
+}
+
+/* Re-lay the history for a new view so old rows stay where their frequencies are. */
+static void hist_remap(int old_view_khz, int old_span_khz)
+{
+	static uint8_t tmp[W];
+	int new_span = span_khz();
+	int d = (st.view_khz - new_span / 2) - (old_view_khz - old_span_khz / 2);
+
+	for (unsigned int r = 0; r < WF_H; r++) {
+		for (unsigned int c = 0; c < W; c++) {
+			float x = ((float)d + ((float)c + 0.5f) * (float)new_span / (float)W) *
+				  (float)W / (float)old_span_khz;
+
+			tmp[c] = (x >= 0.0f && x < (float)W) ? hist[r][(unsigned int)x] : 0U;
+		}
+		memcpy(hist[r], tmp, W);
+	}
+	st.trace_reset = true;
+}
+
+/* Retune when the view leaves the span the radio captures. */
+static void follow_view(void)
+{
+	int half = fs_khz() / 2, span = span_khz(), lo = st.lo_mhz * 1000;
+
+	if (st.view_khz - span / 2 < lo - half || st.view_khz + span / 2 > lo + half) {
+		st.lo_mhz = CLAMP((st.view_khz + 500) / 1000, FREQ_MIN_MHZ, FREQ_MAX_MHZ);
+		st.dirty_radio = true;
+	}
+}
+
 static void draw_header(void)
 {
 	char line[48];
@@ -204,14 +252,32 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d MHZ%s %2uM G:%s %c%d/%d", st.freq_mhz,
-		 st.tune_warn ? "!" : " ", (unsigned int)(esp_sdr_rx_rate_hz(st.rate) / 1000000U),
-		 gain,
-		 st.auto_floor ? 'A' : 'L', (int)st.floor_db, (int)st.range_db);
+	snprintf(line, sizeof(line), "%4d.%03d%s %2uM X%d G:%s %c%d/%d", st.view_khz / 1000,
+		 st.view_khz % 1000, st.tune_warn ? "!" : " ", (unsigned int)(fs_khz() / 1000),
+		 st.zoom, gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db, (int)st.range_db);
 	for (unsigned int k = 0; k < W * HDR_H; k++) {
 		fb[k] = bg;
 	}
 	draw_text(fb, 2, 1, line, fg);
+
+	/* Frequency ticks, at least 24 pixels apart; taller on whole MHz. */
+	static const int steps[] = {10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000};
+	int span = span_khz(), left = st.view_khz - span / 2, step = steps[ARRAY_SIZE(steps) - 1];
+
+	for (size_t i = 0; i < ARRAY_SIZE(steps); i++) {
+		if (steps[i] * W >= 24 * span) {
+			step = steps[i];
+			break;
+		}
+	}
+	for (int f = (left + step - 1) / step * step; f < left + span; f += step) {
+		unsigned int x = (unsigned int)((f - left) * W / span);
+
+		for (unsigned int y = (f % 1000 == 0) ? HDR_H - 2U : HDR_H - 1U; y < HDR_H && x < W;
+		     y++) {
+			fb[y * W + x] = RGB565(160, 160, 160);
+		}
+	}
 	/* Centre marker. */
 	fb[(HDR_H - 1) * W + W / 2] = RGB565(255, 0, 0);
 	blit(0, HDR_H);
@@ -367,27 +433,35 @@ static char kbd_poll(void)
 static void handle_key(char k)
 {
 	int gmax = esp_sdr_rx_gain_max();
+	int old_view = st.view_khz, old_span = span_khz();
 
 	switch (k) {
 	case ',':
-		st.freq_mhz -= 1;
+		st.view_khz -= old_span / 8;
 		break;
 	case '/':
-		st.freq_mhz += 1;
+		st.view_khz += old_span / 8;
 		break;
 	case ';':
-		st.freq_mhz += 10;
+		st.zoom = MIN(st.zoom * 2, ZOOM_MAX);
 		break;
 	case '.':
-		st.freq_mhz -= 10;
+		st.zoom = MAX(st.zoom / 2, 1);
+		break;
+	case 'j':
+		st.view_khz -= 10000;
+		break;
+	case 'k':
+		st.view_khz += 10000;
 		break;
 	case 'h':
-		st.freq_mhz = FREQ_DEFAULT_MHZ;
+		st.view_khz = FREQ_DEFAULT_MHZ * 1000;
+		st.zoom = 1;
 		break;
 	case 'r':
 		st.rate = st.rate == ESP_SDR_RATE_16MSPS ? ESP_SDR_RATE_40MSPS
 							 : ESP_SDR_RATE_16MSPS;
-		return;
+		break;
 	case '-':
 		st.auto_floor = false;
 		st.floor_db -= 2.0f;
@@ -421,17 +495,20 @@ static void handle_key(char k)
 	default:
 		return;
 	}
-	st.freq_mhz = CLAMP(st.freq_mhz, FREQ_MIN_MHZ, FREQ_MAX_MHZ);
-	st.dirty_radio = true;
+	st.view_khz = CLAMP(st.view_khz, FREQ_MIN_MHZ * 1000, FREQ_MAX_MHZ * 1000);
+	follow_view();
+	if (st.view_khz != old_view || span_khz() != old_span) {
+		hist_remap(old_view, old_span);
+	}
 }
 
 static void apply_radio(void)
 {
-	int ret = esp_sdr_set_freq(st.freq_mhz);
+	int ret = esp_sdr_set_freq(st.lo_mhz);
 
 	st.tune_warn = ret == -ERANGE;
 	if (ret != 0 && ret != -ERANGE) {
-		LOG_WRN("set_freq %d: %d", st.freq_mhz, ret);
+		LOG_WRN("set_freq %d: %d", st.lo_mhz, ret);
 	}
 	ret = esp_sdr_rx_set_gain(st.gain);
 	if (ret != 0) {
@@ -478,31 +555,47 @@ static int capture_row(void)
 
 	float norm = 1.0f / (FULLSCALE * FULLSCALE * window_gain * (float)segments);
 	float sum = 0.0f;
+	unsigned int valid = 0;
+
+	/* The LO leakage and DC residue: the neighbours' mean instead. */
+	psd[0] = psd[1] = psd[NFFT - 1U] = 0.5f * (psd[2] + psd[NFFT - 2U]);
+
+	/* Pixel edges in shifted bins (NFFT/2 is the LO). */
+	float bin_khz = (float)fs_khz() / (float)NFFT;
+	float px_bins = (float)span_khz() / (float)W / bin_khz;
+	float left = (float)(st.view_khz - span_khz() / 2 - st.lo_mhz * 1000) / bin_khz +
+		     (float)(NFFT / 2U);
 
 	for (unsigned int c = 0; c < W; c++) {
-		unsigned int m = BIN0 + c;               /* shifted: m = NFFT/2 is DC */
-		unsigned int k = (m + NFFT / 2U) % NFFT; /* natural order */
-		float p = psd[k];
+		int ma = (int)floorf(left + (float)c * px_bins);
+		int mb = MAX((int)floorf(left + (float)(c + 1U) * px_bins), ma + 1);
+		float p = 0.0f;
 
-		/* The LO leakage and DC residue: the neighbours' mean instead. */
-		if (m == NFFT / 2U) {
-			p = 0.5f * (psd[1] + psd[NFFT - 1U]);
+		if (ma < 0 || mb > (int)NFFT) {
+			row_db[c] = FLOOR_DB;
+			continue;
+		}
+		for (int m = ma; m < mb; m++) {
+			p = MAX(p, psd[((unsigned int)m + NFFT / 2U) % NFFT]);
 		}
 		p *= norm;
 		row_db[c] = p > 0.0f ? 10.0f * log10f(p) : FLOOR_DB;
 		sum += row_db[c];
+		valid++;
 	}
 
-	if (st.auto_floor) {
+	if (st.auto_floor && valid > 0) {
 		/* Track the mean level; the floor sits a little below it. */
-		st.floor_db += 0.05f * (sum / (float)W - 5.0f - st.floor_db);
+		st.floor_db += 0.05f * (sum / (float)valid - 5.0f - st.floor_db);
 	}
 
 	head = (head + WF_H - 1U) % WF_H;
 	for (unsigned int c = 0; c < W; c++) {
 		hist[head][c] = (uint8_t)level(row_db[c]);
-		trace_db[c] += 0.3f * (row_db[c] - trace_db[c]);
+		trace_db[c] = st.trace_reset ? row_db[c]
+					     : trace_db[c] + 0.3f * (row_db[c] - trace_db[c]);
 	}
+	st.trace_reset = false;
 	return 0;
 }
 
@@ -569,7 +662,9 @@ int main(void)
 		uint32_t now = k_uptime_get_32();
 
 		if (now - last_ms >= 5000U) {
-			printk("waterfall: %d MHz, %u rows/s, floor %d dB, gain %d\n", st.freq_mhz,
+			printk("waterfall: LO %d MHz, view %d kHz x%d, %u rows/s, floor %d dB, "
+			       "gain %d\n",
+			       st.lo_mhz, st.view_khz, st.zoom,
 			       (unsigned int)(rows * 1000U / (now - last_ms)), (int)st.floor_db,
 			       st.gain);
 			rows = 0;
