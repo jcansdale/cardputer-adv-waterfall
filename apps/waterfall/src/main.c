@@ -10,9 +10,9 @@
  * on the way to the display, and remapped when the view pans or zooms.
  *
  * Keys (Cardputer arrows are ; . , /):
- *   , /   scroll left / right        ; .   zoom in / out (x1 to x8)
- *   j k   frequency -10 / +10 MHz    h     back to 2440 MHz, x1
- *   r     rate 16 / 40 / 80 MS/s     w     Wi-Fi channel overlay on/off
+ *   , /   scroll left / right        ; .   span 80/40/16/8/4/2 MHz narrower / wider
+ *   j k   frequency -10 / +10 MHz    h     back to 2440 MHz, 16 MHz span
+ *   w     Wi-Fi channel overlay on/off
  *   p     peak hold over PEAK_BURSTS bursts on/off
  *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
@@ -68,7 +68,23 @@ SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
 
 #define NFFT      1024U
 #define SAMPLES   4096U
-#define ZOOM_MAX  8
+
+/*
+ * One ladder of screen spans for the zoom keys: each takes the narrowest sample rate that
+ * covers it (the finest bins), and the narrow ones a part of the 16 MS/s capture.
+ */
+static const struct {
+	enum esp_sdr_rate rate;
+	int zoom;
+} spans[] = {
+	{ESP_SDR_RATE_80MSPS, 1}, /* 80 MHz */
+	{ESP_SDR_RATE_40MSPS, 1}, /* 40 MHz */
+	{ESP_SDR_RATE_16MSPS, 1}, /* 16 MHz */
+	{ESP_SDR_RATE_16MSPS, 2}, /* 8 MHz */
+	{ESP_SDR_RATE_16MSPS, 4}, /* 4 MHz */
+	{ESP_SDR_RATE_16MSPS, 8}, /* 2 MHz */
+};
+#define SPAN_HOME 2 /* 16 MHz */
 /* Wi-Fi is bursty: with peak hold each row is the per-bin maximum over this many bursts. */
 #define PEAK_BURSTS 8
 #define FULLSCALE 512.0f
@@ -100,6 +116,7 @@ static uint16_t fb[W * CHUNK_ROWS];
 static struct {
 	int lo_mhz;   /* the radio's LO */
 	int view_khz; /* the centre of the screen */
+	int span_i;   /* the step in spans[] */
 	int zoom;     /* the screen spans the sample rate / zoom */
 	bool trace_reset;
 	bool channels; /* the 2.4 GHz Wi-Fi channel overlay */
@@ -116,6 +133,7 @@ static struct {
 } st = {
 	.lo_mhz = FREQ_DEFAULT_MHZ,
 	.view_khz = FREQ_DEFAULT_MHZ * 1000,
+	.span_i = SPAN_HOME,
 	.zoom = 1,
 	.peak_hold = true,
 	.rate = ESP_SDR_RATE_16MSPS,
@@ -250,8 +268,8 @@ static uint8_t *hist_row(unsigned int age)
 
 /*
  * Re-lay the history for a new view so old rows stay where their frequencies are, and
- * stretch it in time with the zoom (anchored at the newest row), as rows are drawn zoom
- * pixels tall. In place: zooming in reads rows at or above the one written, so go down
+ * stretch it in time with the zoom (anchored at the newest row), as a zoomed-in row covers
+ * 1/zoom of the time. In place: zooming in reads rows at or above the one written, so go down
  * from the bottom; zooming out reads rows at or below, so go up from the top.
  */
 static void hist_remap(int old_view_khz, int old_span_khz, int old_zoom)
@@ -310,9 +328,9 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d.%03d%s %2uM%c%c X%d G:%s %c%d/%d", st.view_khz / 1000,
-		 st.view_khz % 1000, st.tune_warn ? "!" : " ", (unsigned int)(fs_khz() / 1000),
-		 st.peak_hold ? 'P' : ' ', st.hide_spurs ? 'X' : ' ', st.zoom, gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db, (int)st.range_db);
+	snprintf(line, sizeof(line), "%4d.%03d%s %2dM %c%c G:%s %c%d/%d", st.view_khz / 1000,
+		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000,
+		 st.peak_hold ? 'P' : ' ', st.hide_spurs ? 'X' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db, (int)st.range_db);
 	for (unsigned int k = 0; k < W * HDR_H; k++) {
 		fb[k] = bg;
 	}
@@ -560,9 +578,8 @@ static void draw_help(void)
 	static const char *const lines[] = {
 		"KEYS                  ESC: CLOSE",
 		",  /   SCROLL       (LEFT/RIGHT)",
-		";  .   ZOOM IN/OUT  (UP/DOWN)",
+		";  .   SPAN 80-2 MHZ (UP/DOWN)",
 		"J  K   -10/+10 MHZ    H  HOME",
-		"R      RATE 16/40/80 MS/S",
 		"N  M   GAIN -/+       G  AGC",
 		"-  =   COLOUR FLOOR   A  AUTO",
 		"[  ]   COLOUR RANGE",
@@ -718,6 +735,16 @@ static char kbd_poll(void)
 }
 #endif
 
+static void set_span(int i)
+{
+	if (spans[i].rate != st.rate) {
+		st.rate = spans[i].rate;
+		st.dirty_radio = true; /* the analog filters follow the rate */
+	}
+	st.span_i = i;
+	st.zoom = spans[i].zoom;
+}
+
 static void handle_key(char k)
 {
 	int gmax = esp_sdr_rx_gain_max();
@@ -741,10 +768,10 @@ static void handle_key(char k)
 		st.view_khz += old_span / 8;
 		break;
 	case ';':
-		st.zoom = MIN(st.zoom * 2, ZOOM_MAX);
+		set_span(MIN(st.span_i + 1, (int)ARRAY_SIZE(spans) - 1));
 		break;
 	case '.':
-		st.zoom = MAX(st.zoom / 2, 1);
+		set_span(MAX(st.span_i - 1, 0));
 		break;
 	case 'j':
 		st.view_khz -= 10000;
@@ -754,13 +781,7 @@ static void handle_key(char k)
 		break;
 	case 'h':
 		st.view_khz = FREQ_DEFAULT_MHZ * 1000;
-		st.zoom = 1;
-		break;
-	case 'r':
-		st.rate = st.rate == ESP_SDR_RATE_16MSPS   ? ESP_SDR_RATE_40MSPS
-			  : st.rate == ESP_SDR_RATE_40MSPS ? ESP_SDR_RATE_80MSPS
-							   : ESP_SDR_RATE_16MSPS;
-		st.dirty_radio = true; /* the analog filters follow the rate */
+		set_span(SPAN_HOME);
 		break;
 	case 'p':
 		st.peak_hold = !st.peak_hold;
@@ -886,7 +907,8 @@ static int capture_psd(void)
 
 static int capture_row(void)
 {
-	unsigned int bursts = st.peak_hold ? PEAK_BURSTS : 1U;
+	/* Zoomed in, each of the zoom rows per redraw takes its share of the peak bursts. */
+	unsigned int bursts = st.peak_hold ? MAX(PEAK_BURSTS / (unsigned int)st.zoom, 1U) : 1U;
 	int segments = 0;
 
 	for (unsigned int n = 0; n < bursts; n++) {
@@ -972,11 +994,6 @@ static int capture_row(void)
 		dump_db[c] = dump_fresh ? row_db[c] : MAX(dump_db[c], row_db[c]);
 	}
 	dump_fresh = false;
-	/* Zoomed in, each row is zoom pixels tall: time stretches with frequency. */
-	for (int n = 1; n < st.zoom; n++) {
-		head = (head + WF_H - 1U) % WF_H;
-		memcpy(hist[head], hist_row(1), W);
-	}
 	return 0;
 }
 
@@ -1061,7 +1078,12 @@ int main(void)
 		if (st.dirty_radio) {
 			apply_radio();
 		}
-		ret = capture_row();
+		/* Zoomed in, zoom captures per redraw: time resolution grows with frequency's. */
+		ret = 0;
+		for (int n = 0; n < st.zoom && ret == 0; n++) {
+			ret = capture_row();
+			rows++;
+		}
 		if (ret != 0) {
 			LOG_WRN("capture: %d", ret);
 			k_msleep(100);
@@ -1075,7 +1097,6 @@ int main(void)
 		} else if (!st.help_drawn) {
 			draw_help();
 		}
-		rows++;
 
 		uint32_t now = k_uptime_get_32();
 

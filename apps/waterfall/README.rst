@@ -7,11 +7,15 @@ A receive-only spectrum and waterfall on the Cardputer-Adv's 240x135 display, in
 no MicroPython, no LVGL, no PSRAM (the Stamp-S3A has none).
 
 Each row is a Welch average of Hann-windowed 1024-point FFTs over one 4096-sample burst at
-16, 40 or 80 MS/s. The screen shows a view of that span, as wide as the sample rate at x1
-(16, 40 or 80 MHz) down to an eighth of it at x8; the radio's analog filters only pass about
-+-10 MHz at 16 MS/s and, in the PHY's 40 MHz mode used at 40 and 80 MS/s, about +-18 MHz,
-so the outer parts of a wide view are attenuated; each pixel takes the strongest bin under it. Zooming stretches
-time as well: each row is drawn zoom pixels tall, so the waterfall runs that much faster.
+16, 40 or 80 MS/s. The up and down keys step the screen's span through 80, 40, 16, 8, 4 and
+2 MHz, and each span takes the narrowest sample rate that covers it, for the finest bins:
+80 and 40 MHz capture at 80 and 40 MS/s, 16 MHz and below at 16 MS/s (8 to 2 MHz show part of
+that capture). The radio's analog filters only pass about +-10 MHz at 16 MS/s and, in the
+PHY's 40 MHz mode used at 40 and 80 MS/s, about +-18 MHz, so the outer parts of a wide view
+are attenuated; each pixel takes the strongest bin under it. Below 16 MHz, time resolution
+grows with the frequency resolution: the screen is redrawn after 2, 4 or 8 captured rows
+instead of one, each taking its share of the peak hold's bursts (8 at 16 MHz, 1 each at
+2 MHz), so the waterfall scrolls at about the same speed with more detail.
 Scrolling past the captured span retunes the radio, and the waterfall history is shifted and
 rescaled to stay lined up.
 
@@ -19,7 +23,7 @@ Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by
 each row is the per-bin maximum over 8 bursts (peak hold, ``P`` in the header); ``p`` turns
 it off for a plain average.
 
-The top line shows the view's centre frequency, rate, zoom, gain and colour scale; under
+The top line shows the view's centre frequency, span, gain and colour scale; under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
 fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
 which has a narrow artefact of its own (LO leakage, patched over) to ignore. Magenta marks
@@ -54,12 +58,11 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
         other key also closes it)
 ``,``   scroll left by 1/8 screen (left arrow)
 ``/``   scroll right by 1/8 screen (right arrow)
-``;``   zoom in, up to x8 (up arrow)
-``.``   zoom out, down to x1 (down arrow)
+``;``   narrower span, down to 2 MHz (up arrow)
+``.``   wider span, up to 80 MHz (down arrow)
 ``j``   frequency -10 MHz
 ``k``   frequency +10 MHz
-``h``   back to 2440 MHz at x1
-``r``   rate 16 / 40 / 80 MS/s
+``h``   back to 2440 MHz, 16 MHz span
 ``-``   colour floor -2 dB (manual)
 ``=``   colour floor +2 dB (manual)
 ``[``   colour range -5 dB
