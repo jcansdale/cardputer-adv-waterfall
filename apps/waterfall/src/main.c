@@ -320,7 +320,11 @@ static void draw_header(void)
 	blit(0, HDR_H);
 }
 
-/* Overlay per pixel: the channel centred there (0: none), inside 1, 6 or 11 (20 MHz). */
+/*
+ * Per pixel: the Wi-Fi channel centred there (0: none; always, for the labels) and, with the
+ * overlay on, whether it is inside channel 1, 6 or 11 (20 MHz).
+ */
+#define LABEL_H 10 /* label text and tick at the top of the trace */
 static uint8_t ch_at[W];
 static bool ch_band[W];
 
@@ -335,16 +339,13 @@ static void build_overlay(void)
 
 	memset(ch_at, 0, sizeof(ch_at));
 	memset(ch_band, 0, sizeof(ch_band));
-	if (!st.channels) {
-		return;
-	}
 	for (int ch = 1; ch <= 14; ch++) {
 		int x = (int)(((int64_t)chan_khz(ch) - left) * W / span);
 
 		if (x >= 0 && x < (int)W) {
 			ch_at[x] = (uint8_t)ch;
 		}
-		if (ch == 1 || ch == 6 || ch == 11) {
+		if (st.channels && (ch == 1 || ch == 6 || ch == 11)) {
 			int a = (int)(((int64_t)chan_khz(ch) - 10000 - left) * W / span);
 			int b = (int)(((int64_t)chan_khz(ch) + 10000 - left) * W / span);
 
@@ -382,7 +383,9 @@ static void draw_trace(void)
 					     : ch_band[x]                     ? band
 									      : bg;
 
-				if (ch_at[x] != 0 && (y & 1U) == 0) {
+				if (ch_at[x] != 0 &&
+				    ((y >= LABEL_H - 2U && y < LABEL_H) ||
+				     (st.channels && y >= LABEL_H && (y & 1U) == 0))) {
 					c = mark;
 				}
 
@@ -393,7 +396,7 @@ static void draw_trace(void)
 				fb[r * W + x] = c;
 			}
 		}
-		if (y0 == 0 && st.channels) {
+		if (y0 == 0) {
 			int next = 0; /* the first free pixel for a label */
 
 			for (unsigned int x = 0; x < W; x++) {
@@ -404,8 +407,8 @@ static void draw_trace(void)
 					continue;
 				}
 				snprintf(num, sizeof(num), "%u", ch_at[x]);
-				lx = MAX((int)x + 2, 0);
-				if (lx < next || lx + 6 * (int)strlen(num) > (int)W) {
+				lx = (int)x - (6 * (int)strlen(num) - 1) / 2; /* centred on the channel */
+				if (lx < next || lx < 0 || lx + 6 * (int)strlen(num) > (int)W) {
 					continue;
 				}
 				draw_text(fb, (unsigned int)lx, 1, num, RGB565(255, 220, 0));
