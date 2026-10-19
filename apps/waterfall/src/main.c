@@ -623,9 +623,7 @@ static void draw_trace(void)
 			for (unsigned int r = 0; r < rows; r++) {
 				unsigned int y = y0 + r; /* 0 at the top */
 				unsigned int from_bottom = PSD_H - 1U - y;
-				uint16_t c = (x == W / 2 || y == PSD_H / 2) ? grid
-					     : ch_band[x]                     ? band
-									      : bg;
+				uint16_t c = x == W / 2 ? grid : ch_band[x] ? band : bg;
 
 				if (ch_at[x] != 0 &&
 				    ((y >= LABEL_H - 2U && y < LABEL_H) ||
