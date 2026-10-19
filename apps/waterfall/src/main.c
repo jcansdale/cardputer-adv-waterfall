@@ -13,7 +13,7 @@
  *   , /   scroll left / right        ; .   span 80/40/16/8/4/2 MHz narrower / wider
  *   h     back to 2440 MHz, 16 MHz span
  *   w     Wi-Fi channel overlay on/off
- *   p     peak hold over PEAK_BURSTS bursts on/off
+ *   p     bursts per row (peak hold): 8 4 2 1 32 16, faster to the right, then slower
  *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  *   x     hide the board's own clock harmonics on/off
@@ -109,7 +109,8 @@ static const struct {
 };
 #define SPAN_HOME 2 /* 16 MHz */
 /* Wi-Fi is bursty: with peak hold each row is the per-bin maximum over this many bursts. */
-#define PEAK_BURSTS 8
+#define PEAK_BURSTS 8 /* the default; p steps through 8, 4, 2, 1, 32, 16 */
+#define PEAK_MAX    32
 #define FULLSCALE 512.0f
 #define FLOOR_DB  (-150.0f)
 
@@ -155,7 +156,7 @@ static struct {
 	int zoom;     /* the screen spans the sample rate / zoom */
 	bool trace_reset;
 	bool channels; /* the 2.4 GHz Wi-Fi channel overlay */
-	bool peak_hold;
+	int peak; /* bursts per row, their per-bin maximum (1: one burst's average) */
 	bool hide_spurs; /* patch over the board's clock harmonics */
 	enum esp_sdr_rate rate;
 	int gain; /* ESP_SDR_RX_GAIN_AUTO or a table index */
@@ -177,7 +178,7 @@ static struct {
 	.view_khz = FREQ_DEFAULT_MHZ * 1000,
 	.span_i = SPAN_HOME,
 	.zoom = 1,
-	.peak_hold = true,
+	.peak = PEAK_BURSTS,
 	.rate = ESP_SDR_RATE_16MSPS,
 	/* Fixed mid gain: the AGC re-levels each burst and flattens bursty Wi-Fi into the noise. */
 	.gain = 42,
@@ -383,10 +384,10 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d.%03d%s %2dM %c%c G:%s %c%d/%d", st.view_khz / 1000,
-		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000,
-		 st.peak_hold ? 'P' : ' ', st.hide_spurs ? 'X' : ' ', gain, st.auto_floor ? 'A' : 'L',
-		 (int)st.floor_db, (int)st.range_db);
+	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c G:%s %c%d/%d", st.view_khz / 1000,
+		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
+		 st.hide_spurs ? 'X' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
+		 (int)st.range_db);
 	if (!st.screen) {
 		snprintf(line, sizeof(line), "SCREEN PAUSED BY HOST");
 	}
@@ -641,8 +642,8 @@ static void draw_help(void)
 		"H      HOME (2440 MHZ, 16 MHZ SPAN)",
 		"N  M   GAIN -/+       G  AGC",
 		"-  =   COLOUR FLOOR   A  AUTO",
-		"[  ]   COLOUR RANGE",
-		"P      PEAK HOLD      W  CH. LINES",
+		"[  ]   COLOUR RANGE   W  CH. LINES",
+		"P      SPEED: PEAK OF 8,4,2,1,32,16",
 		"X      HIDE OWN CLOCK HARMONICS",
 		"V      AUTO-ROTATE (HOLD UPRIGHT)",
 		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
@@ -960,9 +961,8 @@ static void side_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "G:%d", st.gain);
 	}
-	snprintf(text, sizeof(text), "%d.%03d%s %dM %c%c", st.view_khz / 1000, st.view_khz % 1000,
-		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak_hold ? 'P' : ' ',
-		 st.hide_spurs ? 'X' : ' ');
+	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c", st.view_khz / 1000, st.view_khz % 1000,
+		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.hide_spurs ? 'X' : ' ');
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
 	snprintf(text, sizeof(text), "%s %c%d/%d", gain, st.auto_floor ? 'A' : 'L',
 		 (int)st.floor_db, (int)st.range_db);
@@ -1291,7 +1291,8 @@ static void handle_key(char k)
 		set_span(SPAN_HOME);
 		break;
 	case 'p':
-		st.peak_hold = !st.peak_hold;
+		/* Halve: faster, steadier rows lost; from 1 back to the slowest. */
+		st.peak = st.peak > 1 ? st.peak / 2 : PEAK_MAX;
 		return;
 	case '-':
 		st.auto_floor = false;
@@ -1635,7 +1636,7 @@ static int capture_psd(void)
 static int capture_row(void)
 {
 	/* Zoomed in, each of the zoom rows per redraw takes its share of the peak bursts. */
-	unsigned int bursts = st.peak_hold ? MAX(PEAK_BURSTS / (unsigned int)st.zoom, 1U) : 1U;
+	unsigned int bursts = MAX((unsigned int)st.peak / (unsigned int)st.zoom, 1U);
 	int segments = 0;
 
 	for (unsigned int n = 0; n < bursts; n++) {
@@ -1737,7 +1738,7 @@ static void dump_spectrum(void)
 	static char line[64 + W * 5];
 	int len = snprintf(line, sizeof(line),
 			   "spec lo %d view %d span %d rate %u zoom %d peak %d floor %d:", st.lo_mhz,
-			   st.view_khz, span_khz(), (unsigned int)fs_khz(), st.zoom, st.peak_hold,
+			   st.view_khz, span_khz(), (unsigned int)fs_khz(), st.zoom, st.peak,
 			   (int)st.floor_db);
 
 	for (unsigned int c = 0; c < W && len < (int)sizeof(line) - 8; c++) {
@@ -1759,7 +1760,7 @@ static void print_status(void)
 {
 	con_printf("stat lo %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
 	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d orient %d rotate %d acc %d %d %d loop_max %u\n",
-	       st.lo_mhz, st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak_hold,
+	       st.lo_mhz, st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
 	       st.hide_spurs, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
 	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.orient, st.auto_rotate,
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
@@ -1829,7 +1830,7 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
-		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak on|off, hide on|off\n");
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
 	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
@@ -1893,9 +1894,13 @@ static void handle_cmd(char *line)
 								    : ORIENT_LANDSCAPE;
 		}
 		con_printf("ok rotate %s orient %d\n", arg, st.orient);
+	} else if (strcmp(line, "peak") == 0 && parse_int(arg, &v) && v >= 1 && v <= PEAK_MAX &&
+		   IS_POWER_OF_TWO(v)) {
+		st.peak = (int)v; /* bursts per row */
+		con_printf("ok peak %d\n", st.peak);
 	} else if (strcmp(line, "peak") == 0 && parse_flag(arg, &flag)) {
-		st.peak_hold = flag;
-		con_printf("ok peak %d\n", st.peak_hold);
+		st.peak = flag ? PEAK_BURSTS : 1;
+		con_printf("ok peak %d\n", st.peak);
 	} else if (strcmp(line, "hide") == 0 && parse_flag(arg, &flag)) {
 		st.hide_spurs = flag;
 		con_printf("ok hide %d\n", st.hide_spurs);

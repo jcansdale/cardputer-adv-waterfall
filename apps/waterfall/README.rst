@@ -37,8 +37,17 @@ rotation (left and right still scroll, up and down still step the span as seen o
 ``v`` turns the automatic rotation off and on. The key list stays in landscape.
 
 Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by default
-each row is the per-bin maximum over 8 bursts (peak hold, ``P`` in the header); ``p`` turns
-it off for a plain average.
+each row is the per-bin maximum over 8 bursts (peak hold, ``P8`` in the header). ``p`` sets
+the speed: each press halves the bursts per row, 8, 4, 2, 1 (one burst's plain average), then
+wraps round to the slow end, 32 and 16. Fewer bursts scroll faster but miss more of short
+bursts; 16 and 32 catch more and hold more seconds of history. Rows a second at 16 MHz:
+
+==========  ===  ===  ===  ===  ===  ===
+Bursts       32   16    8    4    2    1
+==========  ===  ===  ===  ===  ===  ===
+Landscape     8   13   24   38   55   75
+Portrait     10   18   30   50   75  100
+==========  ===  ===  ===  ===  ===  ===
 
 The top line shows the view's centre frequency, span, gain and colour scale; under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
@@ -84,7 +93,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``]``   colour range +5 dB
 ``a``   automatic colour floor on / off
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
-``p``   peak hold over 8 bursts on / off (on at start)
+``p``   speed: bursts per row (peak hold), 8 (at start), 4, 2, 1, 32, 16
 ``x``   hide the board's clock harmonics on / off (off at start)
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
 ``m``   fixed gain +1
@@ -130,7 +139,7 @@ Command               Action
 ``$lo <MHz>``         the LO alone, the view staying put when it fits
 ``$span <MHz>``       80, 40, 16, 8, 4 or 2
 ``$gain <n|auto>``    fixed gain table index or AGC
-``$peak on|off``      peak hold
+``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
 ``$hide on|off``      patch over the clock harmonics (display only)
 ``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
                       ``right`` (that edge down, portrait)
