@@ -3,6 +3,14 @@
 ESP-SDR waterfall (M5Stack Cardputer-Adv)
 #########################################
 
+.. The path works from here (GitHub) and from doc/apps/waterfall.rst (Sphinx), both two
+   levels below the repository root.
+
+.. image:: ../../apps/waterfall/cardputer-adv.jpg
+   :alt: The Cardputer-Adv showing the waterfall at 2454.5 MHz, 80 MHz span, with the Wi-Fi
+         channel numbers over the trace
+   :width: 480
+
 A receive-only spectrum and waterfall on the Cardputer-Adv's 240x135 display, in plain C:
 no MicroPython, no LVGL, no PSRAM (the Stamp-S3A has none).
 
