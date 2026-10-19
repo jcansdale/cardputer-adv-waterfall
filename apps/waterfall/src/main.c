@@ -126,6 +126,17 @@ static const struct device *const console = DEVICE_DT_GET(DT_CHOSEN(zephyr_conso
 
 static float re[NFFT], im[NFFT], window[NFFT], psd[NFFT], peak[NFFT];
 static float tw_cos[NFFT / 2], tw_sin[NFFT / 2];
+
+/*
+ * The FFT: esp-dsp's ESP32-S3 kernel (west project esp-dsp), interleaved complex in natural
+ * order, bins out in bit-reversed order. Checked against the C one at boot (fft_check()),
+ * which takes over if they disagree.
+ */
+extern int dsps_fft2r_fc32_aes3_(float *data, int n, float *w);
+static float cbuf[2 * NFFT] __aligned(16);
+static float dsp_w[NFFT] __aligned(16); /* cos, sin of tau i / NFFT, i bit reversed */
+static uint16_t rev[NFFT];
+static bool use_dsp;
 static float window_gain;
 
 static float row_db[W], trace_db[W];
@@ -1518,6 +1529,60 @@ static void send_bins(const float *p, float norm, unsigned int bursts, unsigned 
 /* ---- spectrum ---- */
 
 /* One burst's Welch average into psd; @return the segment count, or a negative error. */
+static void fft_init(void)
+{
+	unsigned int bits = LOG2(NFFT);
+
+	esp_sdr_fft_twiddles(tw_cos, tw_sin, NFFT);
+	for (unsigned int i = 0; i < NFFT; i++) {
+		unsigned int r = 0;
+
+		for (unsigned int b = 0; b < bits; b++) {
+			r |= ((i >> b) & 1U) << (bits - 1U - b);
+		}
+		rev[i] = (uint16_t)r;
+	}
+	for (unsigned int i = 0; i < NFFT / 2U; i++) {
+		float a = 6.28318531f * (float)(rev[i] >> 1) / (float)NFFT;
+
+		dsp_w[2U * i] = cosf(a);
+		dsp_w[2U * i + 1U] = sinf(a);
+	}
+}
+
+/* Two tones, either side of DC: the kernel must agree with the C FFT, mirror included. */
+static void fft_check(void)
+{
+	float err = 0.0f, top = 0.0f;
+	uint32_t t0, t_dsp, t_c;
+
+	for (unsigned int k = 0; k < NFFT; k++) {
+		float a = 6.28318531f * 100.0f * (float)k / (float)NFFT;
+		float b = -6.28318531f * 37.3f * (float)k / (float)NFFT;
+
+		re[k] = cosf(a) + 0.01f * cosf(b);
+		im[k] = sinf(a) + 0.01f * sinf(b);
+		cbuf[2U * k] = re[k];
+		cbuf[2U * k + 1U] = im[k];
+	}
+	t0 = k_cycle_get_32();
+	dsps_fft2r_fc32_aes3_(cbuf, NFFT, dsp_w);
+	t_dsp = k_cycle_get_32() - t0;
+	t0 = k_cycle_get_32();
+	esp_sdr_fft(re, im, NFFT, tw_cos, tw_sin, NFFT);
+	t_c = k_cycle_get_32() - t0;
+	for (unsigned int k = 0; k < NFFT; k++) {
+		float pc = re[rev[k]] * re[rev[k]] + im[rev[k]] * im[rev[k]];
+		float pd = cbuf[2U * k] * cbuf[2U * k] + cbuf[2U * k + 1U] * cbuf[2U * k + 1U];
+
+		err = MAX(err, fabsf(pc - pd));
+		top = MAX(top, pc);
+	}
+	use_dsp = err <= 1e-4f * top;
+	LOG_INF("fft: esp-dsp %u us, C %u us, error %.1e: %s", k_cyc_to_us_floor32(t_dsp),
+		k_cyc_to_us_floor32(t_c), (double)(err / top), use_dsp ? "esp-dsp" : "C");
+}
+
 static int capture_psd(void)
 {
 	struct esp_sdr_rx_burst b;
@@ -1543,6 +1608,18 @@ static int capture_psd(void)
 	for (unsigned int s = 0; s < segments; s++) {
 		const uint32_t *w = &b.words[s * NFFT];
 
+		if (use_dsp) {
+			for (unsigned int k = 0; k < NFFT; k++) {
+				cbuf[2U * k] = ((float)esp_sdr_rx_i(w[k]) - dc_i) * window[k];
+				cbuf[2U * k + 1U] = ((float)esp_sdr_rx_q(w[k]) - dc_q) * window[k];
+			}
+			dsps_fft2r_fc32_aes3_(cbuf, NFFT, dsp_w);
+			for (unsigned int k = 0; k < NFFT; k++) {
+				psd[rev[k]] += cbuf[2U * k] * cbuf[2U * k] +
+					       cbuf[2U * k + 1U] * cbuf[2U * k + 1U];
+			}
+			continue;
+		}
 		for (unsigned int k = 0; k < NFFT; k++) {
 			re[k] = ((float)esp_sdr_rx_i(w[k]) - dc_i) * window[k];
 			im[k] = ((float)esp_sdr_rx_q(w[k]) - dc_q) * window[k];
@@ -1688,6 +1765,7 @@ static void print_status(void)
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
 	       (unsigned int)loop_max_ms);
 	loop_max_ms = 0U;
+
 }
 
 static bool parse_flag(const char *a, bool *out)
@@ -1839,7 +1917,8 @@ int main(void)
 		window[k] = esp_sdr_window(ESP_SDR_WINDOW_HANN, k, NFFT);
 		window_gain += (float)NFFT * window[k] * window[k];
 	}
-	esp_sdr_fft_twiddles(tw_cos, tw_sin, NFFT);
+	fft_init();
+	fft_check();
 	build_palette();
 	for (unsigned int c = 0; c < W; c++) {
 		trace_db[c] = st.floor_db;

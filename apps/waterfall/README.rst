@@ -19,18 +19,20 @@ instead of one, each taking its share of the peak hold's bursts (8 at 16 MHz, 1 
 Scrolling past the captured span retunes the radio, and the waterfall history is shifted and
 rescaled to stay lined up.
 
-A redraw takes about 25 ms (the display runs at 40 MHz SPI), about two captures without peak
-hold, so rows are captured until a frame is due, at most 15 a second, and the screen then
-scrolls by all of them at once; a key press redraws at once. Without peak hold that is about
-50 rows a second at 16 MHz, against 26 drawing every row.
+The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
+FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. A redraw takes
+about 25 ms (the display runs at 40 MHz SPI), so rows are captured until a frame is due, at
+most 15 a second, and the screen then scrolls by all of them at once; a key press redraws at
+once. At 16 MHz that is about 24 rows a second with peak hold and 70 without (34 and 115 with
+the screen paused).
 
 Held upright (either edge down, past about 60 degrees; back to landscape within about 30 degrees
 of upright, so it does not flip back and forth), the BMI270 accelerometer switches to a portrait
 layout laid out as the landscape one: the settings on two lines, the scale, and the trace with
 the Wi-Fi and Bluetooth LE labels on top, the waterfall under them with the newest row at the
 top. The panel scrolls the waterfall in hardware, so a new row costs one 135-pixel column
-instead of a redraw: about 15 rows a second with peak hold and 70 without, against 12 and 52 in
-landscape. The arrow keys follow the
+instead of a redraw: about 30 rows a second with peak hold and 95 without, against 24 and 70
+in landscape. The arrow keys follow the
 rotation (left and right still scroll, up and down still step the span as seen on the screen);
 ``v`` turns the automatic rotation off and on. The key list stays in landscape.
 
