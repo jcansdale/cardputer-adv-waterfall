@@ -32,6 +32,7 @@ The API reference of the library is generated with Doxygen:
    apps/multiapp
    apps/micropython
    apps/chancap
+   apps/waterfall
 
 .. toctree::
    :maxdepth: 1

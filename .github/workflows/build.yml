@@ -28,7 +28,7 @@ jobs:
         include:
           # Apps, integration and regression images: build only.
           - name: Build xiao_esp32s3
-            platforms: -p xiao_esp32s3/esp32s3/procpu
+            platforms: -p xiao_esp32s3/esp32s3/procpu -p m5stack_stamps3/esp32s3/procpu
             toolchains: xtensa-espressif_esp32s3_zephyr-elf
             twister-args: --build-only
           - name: Build xiao_esp32c6

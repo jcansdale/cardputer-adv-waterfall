@@ -35,11 +35,6 @@ import sys
 import time
 import zlib
 
-try:
-    import serial
-except ImportError:  # pragma: no cover
-    sys.exit("pyserial is needed (pip install pyserial)")
-
 MAGIC = b"ESDR"
 HDR = struct.Struct("<BBHIIiIhBBI")  # after the magic
 FRAME_BINS, FRAME_IQ = ord("B"), ord("I")
@@ -65,6 +60,10 @@ class Link:
     """The console: text lines and binary frames, interleaved."""
 
     def __init__(self, port, verbose=False):
+        try:
+            import serial
+        except ImportError:
+            sys.exit("pyserial is needed (pip install pyserial)")
         self.ser = serial.Serial()
         self.ser.port = port
         # The ESP32-S3's USB Serial/JTAG resets the chip on RTS without DTR; macOS raises

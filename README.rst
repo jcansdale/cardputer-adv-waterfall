@@ -66,6 +66,8 @@ Contents
        - ``micropython``: MicroPython REPL on USB, toward GNU Radio flowgraphs
        - ``chancap``: one capture per packet per channel of a grid, as
          VITA 49.2 over USB (`doc/chancap.md <doc/chancap.md>`__)
+       - ``waterfall``: spectrum and waterfall on the M5Stack Cardputer-Adv's
+         screen and keyboard
        - ``common``: USB with DFU, watchdogs, crash records
    * - ``tests/``
      - ``unit`` (host), ``integration`` (one board), ``regression`` (two
@@ -75,7 +77,9 @@ Contents
    * - ``scripts/``
      - ``west dfu`` (``west_commands/``), test runners
    * - ``boards/``
-     - ``waveshare/esp32c5_zero``: Waveshare ESP32-C5-Zero
+     - - ``waveshare/esp32c5_zero``: Waveshare ESP32-C5-Zero
+       - ``shields/m5stack_cardputer_adv``: M5Stack Cardputer-Adv (display,
+         keyboard) on Zephyr's ``m5stack_stamps3``
    * - ``zephyr/``
      - ``module.yml`` and the ``librftest.a`` blobs
    * - ``west.yml``

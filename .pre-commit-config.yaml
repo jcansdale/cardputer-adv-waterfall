@@ -37,7 +37,7 @@ repos:
         entry: scripts/run-host-tests.sh
         language: system
         files: >-
-          ^(apps/multiapp/[^/]+\.py$|apps/micropython/(tools|eggs)/|scripts/|doc/registers/|tests/host/|apps/micropython/modules/gnuradio/eng_notation\.py$)
+          ^(apps/multiapp/[^/]+\.py$|apps/micropython/(tools|eggs)/|apps/waterfall/tools/|scripts/|doc/registers/|tests/host/|apps/micropython/modules/gnuradio/eng_notation\.py$)
         pass_filenames: false
 
       # build.yml "SoapySDR module"
@@ -71,7 +71,8 @@ repos:
         name: apps and tests build for the boards (twister --build-only)
         entry: >-
           scripts/pre-commit/twister.sh --build-only -T apps -T tests
-          -p xiao_esp32s3/esp32s3/procpu -p xiao_esp32c6/esp32c6/hpcore
+          -p xiao_esp32s3/esp32s3/procpu -p m5stack_stamps3/esp32s3/procpu
+          -p xiao_esp32c6/esp32c6/hpcore
           -p waveshare_esp32c5_zero/esp32c5/hpcore
         language: system
         pass_filenames: false
