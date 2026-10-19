@@ -17,12 +17,19 @@
  *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  *   x     hide the board's own clock harmonics on/off
+ *
+ * The USB console takes the same keys, and lines starting with $ as commands for a host
+ * (tools/wf_serial.py): full 1024-bin spectra and raw I/Q bursts come back as binary frames
+ * between the text lines, see struct frame_hdr. $help lists the commands.
  */
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <zephyr/device.h>
@@ -34,6 +41,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/byteorder.h>
+#include <zephyr/sys/crc.h>
 #include <zephyr/sys/util.h>
 
 #include <soc/rtc_cntl_reg.h>
@@ -99,6 +107,7 @@ static const struct {
 	sys_cpu_to_be16((uint16_t)((((r) & 0xf8) << 8) | (((g) & 0xfc) << 3) | ((b) >> 3)))
 
 static const struct device *const display = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+static const struct device *const console = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 
 static float re[NFFT], im[NFFT], window[NFFT], psd[NFFT], peak[NFFT];
 static float tw_cos[NFFT / 2], tw_sin[NFFT / 2];
@@ -130,6 +139,10 @@ static struct {
 	float floor_db, range_db;
 	bool tune_warn;
 	bool dirty_radio;
+	bool text;     /* the periodic spec and status lines on the console */
+	bool screen;   /* drawing; off leaves more time for the host's captures */
+	int bins_left; /* rows whose full spectrum goes to the console, -1 for all */
+	int iq_left;   /* bursts whose raw I/Q goes to the console */
 } st = {
 	.lo_mhz = FREQ_DEFAULT_MHZ,
 	.view_khz = FREQ_DEFAULT_MHZ * 1000,
@@ -143,6 +156,8 @@ static struct {
 	.floor_db = -100.0f,
 	.range_db = 40.0f,
 	.dirty_radio = true,
+	.text = true,
+	.screen = true,
 };
 
 /*
@@ -330,7 +345,11 @@ static void draw_header(void)
 	}
 	snprintf(line, sizeof(line), "%4d.%03d%s %2dM %c%c G:%s %c%d/%d", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000,
-		 st.peak_hold ? 'P' : ' ', st.hide_spurs ? 'X' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db, (int)st.range_db);
+		 st.peak_hold ? 'P' : ' ', st.hide_spurs ? 'X' : ' ', gain, st.auto_floor ? 'A' : 'L',
+		 (int)st.floor_db, (int)st.range_db);
+	if (!st.screen) {
+		snprintf(line, sizeof(line), "SCREEN PAUSED BY HOST");
+	}
 	for (unsigned int k = 0; k < W * HDR_H; k++) {
 		fb[k] = bg;
 	}
@@ -745,6 +764,16 @@ static void set_span(int i)
 	st.zoom = spans[i].zoom;
 }
 
+/* After the view or span changed: keep it in range and the radio and history with it. */
+static void view_changed(int old_view, int old_span, int old_zoom)
+{
+	st.view_khz = CLAMP(st.view_khz, FREQ_MIN_MHZ * 1000, FREQ_MAX_MHZ * 1000);
+	follow_view();
+	if (st.view_khz != old_view || span_khz() != old_span) {
+		hist_remap(old_view, old_span, old_zoom);
+	}
+}
+
 static void handle_key(char k)
 {
 	int gmax = esp_sdr_rx_gain_max();
@@ -825,11 +854,7 @@ static void handle_key(char k)
 	default:
 		return;
 	}
-	st.view_khz = CLAMP(st.view_khz, FREQ_MIN_MHZ * 1000, FREQ_MAX_MHZ * 1000);
-	follow_view();
-	if (st.view_khz != old_view || span_khz() != old_span) {
-		hist_remap(old_view, old_span, old_zoom);
-	}
+	view_changed(old_view, old_span, old_zoom);
 }
 
 static void apply_radio(void)
@@ -868,6 +893,158 @@ static void apply_radio(void)
 	st.dirty_radio = false;
 }
 
+/* ---- binary frames to the host ---- */
+
+/*
+ * A frame: this header (little endian), the payload, then the CRC-32 (IEEE, as zlib's) of
+ * everything after the magic. The host finds frames between text lines by the magic and
+ * drops any the CRC rejects (another thread's log output can land in the middle).
+ */
+struct frame_hdr {
+	char magic[4];   /* "ESDR" */
+	uint8_t type;    /* FRAME_BINS or FRAME_IQ */
+	uint8_t version; /* FRAME_VERSION */
+	uint16_t count;  /* bins or complex samples */
+	uint32_t seq;    /* frames sent since boot */
+	uint32_t ms;     /* uptime */
+	int32_t lo_khz;
+	uint32_t fs_hz;
+	int16_t gain;   /* ESP_SDR_RX_GAIN_AUTO (-1) or the table index */
+	uint8_t bursts; /* peak held over this many bursts (bins) */
+	uint8_t segments; /* Welch average over this many FFTs per burst (bins) */
+	uint32_t len;   /* payload bytes */
+} __packed;
+BUILD_ASSERT(sizeof(struct frame_hdr) == 32);
+
+#define FRAME_BINS    'B' /* int16 centi-dBFS per bin, from -fs/2 up (the LO at count/2) */
+#define FRAME_IQ      'I' /* int16 I, int16 Q per sample, raw units (-512 to 511) */
+#define FRAME_VERSION 1U
+#define FRAME_STALL_MS 200U
+
+static uint32_t frame_seq, frame_crc;
+static bool frame_ok;
+
+/*
+ * Whole FIFO loads to the console, waiting while the host catches up. uart_poll_out() sends
+ * every byte in a USB packet of its own, and drops one when the FIFO is full after a pause.
+ * @return false when nobody has read for FRAME_STALL_MS.
+ */
+static bool con_write(const void *data, size_t len)
+{
+	const uint8_t *p = data;
+	uint32_t t0 = k_uptime_get_32();
+
+	while (len > 0U) {
+		int n = uart_fifo_fill(console, p, (int)MIN(len, 64U));
+
+		if (n > 0) {
+			p += n;
+			len -= (size_t)n;
+			t0 = k_uptime_get_32();
+		} else if (k_uptime_get_32() - t0 > FRAME_STALL_MS) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static void con_printf(const char *fmt, ...)
+{
+	char line[256];
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+	if (n > 0) {
+		con_write(line, MIN((size_t)n, sizeof(line) - 1U));
+	}
+}
+
+static void frame_write(const void *data, size_t len)
+{
+	frame_crc = crc32_ieee_update(frame_crc, data, len);
+	if (frame_ok && !con_write(data, len)) {
+		frame_ok = false; /* nobody reading: give up the requests */
+		st.bins_left = 0;
+		st.iq_left = 0;
+	}
+}
+
+static void frame_begin(uint8_t type, uint16_t count, uint32_t len, unsigned int bursts,
+			unsigned int segments)
+{
+	struct frame_hdr h = {
+		.magic = {'E', 'S', 'D', 'R'},
+		.type = type,
+		.version = FRAME_VERSION,
+		.count = sys_cpu_to_le16(count),
+		.seq = sys_cpu_to_le32(frame_seq++),
+		.ms = sys_cpu_to_le32(k_uptime_get_32()),
+		.lo_khz = (int32_t)sys_cpu_to_le32((uint32_t)(st.lo_mhz * 1000)),
+		.fs_hz = sys_cpu_to_le32(esp_sdr_rx_rate_hz(st.rate)),
+		.gain = (int16_t)sys_cpu_to_le16((uint16_t)st.gain),
+		.bursts = (uint8_t)bursts,
+		.segments = (uint8_t)segments,
+		.len = sys_cpu_to_le32(len),
+	};
+
+	frame_ok = true;
+	frame_crc = 0U;
+	frame_write(h.magic, 4); /* not in the CRC */
+	frame_crc = 0U;
+	frame_write(&h.type, sizeof(h) - 4U);
+}
+
+static void frame_end(void)
+{
+	uint32_t crc = sys_cpu_to_le32(frame_crc);
+
+	frame_write(&crc, sizeof(crc));
+}
+
+/* A burst's raw I/Q as a frame. */
+static void send_iq(const struct esp_sdr_rx_burst *b)
+{
+	int16_t chunk[2 * 64];
+
+	frame_begin(FRAME_IQ, (uint16_t)b->count, (uint32_t)(b->count * 4U), 1U, 0U);
+	for (size_t j = 0; j < b->count; j += 64U) {
+		size_t n = MIN(b->count - j, 64U);
+
+		for (size_t i = 0; i < n; i++) {
+			chunk[2 * i] = (int16_t)sys_cpu_to_le16((uint16_t)esp_sdr_rx_i(b->words[j + i]));
+			chunk[2 * i + 1] =
+				(int16_t)sys_cpu_to_le16((uint16_t)esp_sdr_rx_q(b->words[j + i]));
+		}
+		frame_write(chunk, n * 4U);
+	}
+	frame_end();
+	if (st.iq_left > 0) {
+		st.iq_left--;
+	}
+}
+
+/* The row's spectrum before any patching, in power (times norm for dBFS), as a frame. */
+static void send_bins(const float *p, float norm, unsigned int bursts, unsigned int segments)
+{
+	static int16_t out[NFFT];
+
+	for (unsigned int k = 0; k < NFFT; k++) {
+		float v = p[(k + NFFT / 2U) % NFFT] * norm;
+		float cdb = v > 0.0f ? 1000.0f * log10f(v) : -32768.0f;
+
+		out[k] = (int16_t)sys_cpu_to_le16((uint16_t)(int16_t)CLAMP(lroundf(cdb), -32768L, 32767L));
+	}
+	frame_begin(FRAME_BINS, NFFT, sizeof(out), bursts, segments);
+	frame_write(out, sizeof(out));
+	frame_end();
+	if (st.bins_left > 0) {
+		st.bins_left--;
+	}
+}
+
 /* ---- spectrum ---- */
 
 /* One burst's Welch average into psd; @return the segment count, or a negative error. */
@@ -880,6 +1057,9 @@ static int capture_psd(void)
 
 	if (ret != 0) {
 		return ret;
+	}
+	if (st.iq_left != 0) {
+		send_iq(&b);
 	}
 	for (size_t j = 0; j < b.count; j++) {
 		dc_i += (float)esp_sdr_rx_i(b.words[j]);
@@ -931,6 +1111,10 @@ static int capture_row(void)
 	float norm = 1.0f / (FULLSCALE * FULLSCALE * window_gain * (float)segments);
 	float sum = 0.0f;
 	unsigned int valid = 0;
+
+	if (st.bins_left != 0) {
+		send_bins(psd, norm, bursts, (unsigned int)segments);
+	}
 
 	/* The LO leakage and DC residue: the neighbours' mean instead. */
 	psd[0] = psd[1] = psd[NFFT - 1U] = 0.5f * (psd[2] + psd[NFFT - 2U]);
@@ -1001,7 +1185,7 @@ static int capture_row(void)
  * One console line: the view, then the 240 pixels' maximum in dB since the last line, for
  * looking at the spectrum from a host (keys can be typed on the console too).
  */
-static void dump_spectrum(const struct device *console)
+static void dump_spectrum(void)
 {
 	static char line[64 + W * 5];
 	int len = snprintf(line, sizeof(line),
@@ -1015,15 +1199,148 @@ static void dump_spectrum(const struct device *console)
 	}
 	line[len++] = '\n';
 	/* Straight to the UART: one log message per number would overflow the log buffer. */
-	for (int i = 0; i < len; i++) {
-		uart_poll_out(console, (unsigned char)line[i]);
-	}
+	con_write(line, (size_t)len);
 	dump_fresh = true;
+}
+
+/* ---- console commands ---- */
+
+static void print_status(void)
+{
+	con_printf("stat lo %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
+	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d\n",
+	       st.lo_mhz, st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak_hold,
+	       st.hide_spurs, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
+	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left);
+}
+
+static bool parse_flag(const char *a, bool *out)
+{
+	if (strcmp(a, "on") == 0 || strcmp(a, "1") == 0) {
+		*out = true;
+	} else if (strcmp(a, "off") == 0 || strcmp(a, "0") == 0) {
+		*out = false;
+	} else {
+		return false;
+	}
+	return true;
+}
+
+static bool parse_int(const char *a, long *out)
+{
+	char *end;
+
+	*out = strtol(a, &end, 10);
+	return *a != '\0' && *end == '\0';
+}
+
+/* A count: none for 1, "on" for all (-1), "off" for none. */
+static bool parse_count(const char *a, int *out)
+{
+	long v;
+
+	if (*a == '\0') {
+		*out = 1;
+	} else if (strcmp(a, "on") == 0) {
+		*out = -1;
+	} else if (strcmp(a, "off") == 0) {
+		*out = 0;
+	} else if (parse_int(a, &v) && v >= 0) {
+		*out = (int)MIN(v, (long)INT_MAX);
+	} else {
+		return false;
+	}
+	return true;
+}
+
+/* One "$name arg" line from the console; every command answers "ok ..." or "err ...". */
+static void handle_cmd(char *line)
+{
+	int old_view = st.view_khz, old_span = span_khz(), old_zoom = st.zoom;
+	char *arg = strchr(line, ' ');
+	bool flag;
+	long v;
+
+	if (arg != NULL) {
+		*arg++ = '\0';
+		while (*arg == ' ') {
+			arg++;
+		}
+	} else {
+		arg = "";
+	}
+
+	if (*line == '\0') {
+		return;
+	} else if (strcmp(line, "help") == 0) {
+		con_printf("ok help status, bins [n|on|off], iq [n|off], text on|off, "
+			   "screen on|off, "
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak on|off, hide on|off\n");
+	} else if (strcmp(line, "status") == 0) {
+		print_status();
+	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
+		con_printf("ok bins %d\n", st.bins_left);
+	} else if (strcmp(line, "iq") == 0 && parse_count(arg, &st.iq_left) && st.iq_left >= 0) {
+		con_printf("ok iq %d\n", st.iq_left);
+	} else if (strcmp(line, "text") == 0 && parse_flag(arg, &flag)) {
+		st.text = flag;
+		con_printf("ok text %d\n", st.text);
+	} else if (strcmp(line, "tune") == 0 && parse_int(arg, &v)) {
+		st.view_khz = (int)CLAMP(v, FREQ_MIN_MHZ * 1000L, FREQ_MAX_MHZ * 1000L);
+		view_changed(old_view, old_span, old_zoom);
+		con_printf("ok tune %d lo %d\n", st.view_khz, st.lo_mhz);
+	} else if (strcmp(line, "lo") == 0 && parse_int(arg, &v) && v >= FREQ_MIN_MHZ &&
+		   v <= FREQ_MAX_MHZ) {
+		/* The LO alone; the view moves only if it would leave the capture. */
+		st.lo_mhz = (int)v;
+		st.dirty_radio = true;
+		if (st.view_khz - span_khz() / 2 < st.lo_mhz * 1000 - fs_khz() / 2 ||
+		    st.view_khz + span_khz() / 2 > st.lo_mhz * 1000 + fs_khz() / 2) {
+			st.view_khz = st.lo_mhz * 1000;
+			hist_remap(old_view, old_span, old_zoom);
+		}
+		con_printf("ok lo %d view %d\n", st.lo_mhz, st.view_khz);
+	} else if (strcmp(line, "span") == 0 && parse_int(arg, &v)) {
+		int i;
+
+		for (i = 0; i < (int)ARRAY_SIZE(spans); i++) {
+			if ((int)(esp_sdr_rx_rate_hz(spans[i].rate) / 1000000U) / spans[i].zoom == v) {
+				break;
+			}
+		}
+		if (i == (int)ARRAY_SIZE(spans)) {
+			con_printf("err span 80, 40, 16, 8, 4 or 2\n");
+			return;
+		}
+		set_span(i);
+		view_changed(old_view, old_span, old_zoom);
+		con_printf("ok span %d rate %d\n", span_khz(), fs_khz());
+	} else if (strcmp(line, "gain") == 0 && strcmp(arg, "auto") == 0) {
+		st.gain = ESP_SDR_RX_GAIN_AUTO;
+		st.dirty_radio = true;
+		con_printf("ok gain auto\n");
+	} else if (strcmp(line, "gain") == 0 && parse_int(arg, &v) && v >= 0 &&
+		   v <= esp_sdr_rx_gain_max()) {
+		st.gain = (int)v;
+		st.dirty_radio = true;
+		con_printf("ok gain %d\n", st.gain);
+	} else if (strcmp(line, "screen") == 0 && parse_flag(arg, &flag)) {
+		st.screen = flag;
+		st.help_drawn = false;
+		con_printf("ok screen %d\n", st.screen);
+	} else if (strcmp(line, "peak") == 0 && parse_flag(arg, &flag)) {
+		st.peak_hold = flag;
+		con_printf("ok peak %d\n", st.peak_hold);
+	} else if (strcmp(line, "hide") == 0 && parse_flag(arg, &flag)) {
+		st.hide_spurs = flag;
+		con_printf("ok hide %d\n", st.hide_spurs);
+	} else {
+		con_printf("err %s %s (try $help)\n", line, arg);
+	}
 }
 
 int main(void)
 {
-	const struct device *const console = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 	uint32_t last_dump_ms;
 	struct display_capabilities caps;
 	uint32_t rows = 0, last_ms;
@@ -1066,6 +1383,8 @@ int main(void)
 	last_ms = k_uptime_get_32();
 	last_dump_ms = last_ms;
 	for (;;) {
+		static char cmd[64];
+		static int cmd_len = -1; /* -1: not in a $ command */
 		char k;
 		unsigned char ck;
 
@@ -1073,7 +1392,19 @@ int main(void)
 			handle_key(k);
 		}
 		while (uart_poll_in(console, &ck) == 0) {
-			handle_key((char)ck);
+			if (cmd_len < 0) {
+				if (ck == '$') {
+					cmd_len = 0;
+				} else {
+					handle_key((char)ck);
+				}
+			} else if (ck == '\r' || ck == '\n') {
+				cmd[cmd_len] = '\0';
+				cmd_len = -1;
+				handle_cmd(cmd);
+			} else if (cmd_len < (int)sizeof(cmd) - 1) {
+				cmd[cmd_len++] = (char)ck;
+			}
 		}
 		if (st.dirty_radio) {
 			apply_radio();
@@ -1089,7 +1420,13 @@ int main(void)
 			k_msleep(100);
 			continue;
 		}
-		if (!st.help) {
+		if (!st.screen) {
+			/* Paused for the host (the history still fills): say so once. */
+			if (!st.help_drawn) {
+				draw_header();
+				st.help_drawn = true;
+			}
+		} else if (!st.help) {
 			draw_header();
 			draw_scale();
 			draw_trace();
@@ -1100,13 +1437,13 @@ int main(void)
 
 		uint32_t now = k_uptime_get_32();
 
-		if (now - last_dump_ms >= 2000U) {
-			dump_spectrum(console);
+		if (now - last_dump_ms >= 2000U && st.text) {
+			dump_spectrum();
 			last_dump_ms = now;
 		}
 
-		if (now - last_ms >= 5000U) {
-			printk("waterfall: LO %d MHz, view %d kHz x%d, %u rows/s, floor %d dB, "
+		if (now - last_ms >= 5000U && st.text) {
+			con_printf("waterfall: LO %d MHz, view %d kHz x%d, %u rows/s, floor %d dB, "
 			       "gain %d\n",
 			       st.lo_mhz, st.view_khz, st.zoom,
 			       (unsigned int)(rows * 1000U / (now - last_ms)), (int)st.floor_db,

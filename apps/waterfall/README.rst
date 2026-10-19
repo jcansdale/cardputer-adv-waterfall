@@ -85,6 +85,52 @@ which connected devices hop between. The
 overlay adds dotted lines through the trace and waterfall (cyan for Bluetooth) and tints the
 20 MHz of the non-overlapping Wi-Fi channels 1, 6 and 11 in the trace.
 
-The view centre is limited to 1800 to 2800 MHz. The keys also work typed on the USB console, and every 2 s the console prints a
-``spec`` line: the view, then the 240 pixels' maximum in dB since the previous line. Every key press is logged with its raw TCA8418 event
-on the console, which helps if the key map needs adjusting.
+The view centre is limited to 1800 to 2800 MHz. The keys also work typed on the USB console,
+and every 2 s the console prints a ``spec`` line: the view, then the 240 pixels' maximum in dB
+since the previous line. Every key press is logged with its raw TCA8418 event on the console,
+which helps if the key map needs adjusting.
+
+Host interface
+**************
+
+For development the USB console also takes commands, one per line starting with ``$``; each
+answers with one ``ok <command> ...`` or ``err <command> ...`` line (``stat ...`` for
+``$status``):
+
+====================  ===========================================================
+Command               Action
+====================  ===========================================================
+``$help``             list the commands
+``$status``           the state: LO, view, span, rate, zoom, gain, peak hold, ...
+``$bins [n|on|off]``  send the next n rows' (default 1) full 1024-bin spectra
+``$iq [n|off]``       send the next n bursts' raw I/Q (4096 samples each)
+``$text on|off``      the periodic ``spec`` and status lines
+``$screen on|off``    drawing; without it rows come up to 4 times faster
+``$tune <kHz>``       the view centre (retunes as needed)
+``$lo <MHz>``         the LO alone, the view staying put when it fits
+``$span <MHz>``       80, 40, 16, 8, 4 or 2
+``$gain <n|auto>``    fixed gain table index or AGC
+``$peak on|off``      peak hold
+``$hide on|off``      patch over the clock harmonics (display only)
+====================  ===========================================================
+
+Spectra and I/Q come back as binary frames between the text lines: ``ESDR``, a 28-byte
+little-endian header (type, sequence number, uptime, LO, sample rate, gain, bursts), the
+payload, then a CRC-32 (see ``struct frame_hdr`` in ``src/main.c``). Spectra are the rows as
+captured, before the LO and clock-harmonic patches: int16 hundredths of a dBFS from -fs/2 up,
+the LO in bin 512. I/Q samples are int16 pairs in raw units (-512 to 511).
+
+``tools/wf_serial.py`` (pyserial; numpy and matplotlib for the data) does the framing:
+
+.. code-block:: console
+
+   tools/wf_serial.py status
+   tools/wf_serial.py cmd '$span 2' '$tune 2448000'   # settings stay after the tool exits
+   tools/wf_serial.py bins -n 200 -o rows.npz --png rows.png
+   tools/wf_serial.py iq -n 4 -o iq.npz
+   tools/wf_serial.py --setup '$lo 2443' lines        # steady narrow lines, e.g. the spurs
+   tools/wf_serial.py live                            # waterfall in a window
+
+Captures pause the screen unless ``--keep-screen`` is given. The tool opens the port with DTR
+and RTS raised: the USB Serial/JTAG resets the chip on RTS without DTR, which a plain open with
+both low passes through.
