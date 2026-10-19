@@ -23,16 +23,16 @@ The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked agains
 FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. A redraw takes
 about 25 ms (the display runs at 40 MHz SPI), so rows are captured until a frame is due, at
 most 15 a second, and the screen then scrolls by all of them at once; a key press redraws at
-once. At 16 MHz that is about 24 rows a second with peak hold and 70 without (34 and 115 with
-the screen paused).
+once. At 16 MHz that is about 23 rows a second with peak hold (``P8``) and 57 with one burst a
+row (``P1``); the table under ``p`` has the rest.
 
 Held upright (either edge down, past about 60 degrees; back to landscape within about 30 degrees
 of upright, so it does not flip back and forth), the BMI270 accelerometer switches to a portrait
 layout laid out as the landscape one: the settings on two lines, the scale, and the trace with
 the Wi-Fi and Bluetooth LE labels on top, the waterfall under them with the newest row at the
 top. The panel scrolls the waterfall in hardware, so a new row costs one 135-pixel column
-instead of a redraw: about 30 rows a second with peak hold and 95 without, against 24 and 70
-in landscape. The arrow keys follow the
+instead of a redraw: about 29 rows a second at ``P8`` and 80 at ``P1``, against 23 and 57 in
+landscape. The arrow keys follow the
 rotation (left and right still scroll, up and down still step the span as seen on the screen);
 ``v`` turns the automatic rotation off and on. The key list stays in landscape.
 
@@ -45,8 +45,8 @@ bursts; 16 and 32 catch more and hold more seconds of history. Rows a second at 
 ==========  ===  ===  ===  ===  ===  ===
 Bursts       32   16    8    4    2    1
 ==========  ===  ===  ===  ===  ===  ===
-Landscape     8   13   24   38   55   75
-Portrait     10   18   30   50   75  100
+Landscape     8   13   23   36   44   57
+Portrait      9   17   29   44   62   80
 ==========  ===  ===  ===  ===  ===  ===
 
 The top line shows the view's centre frequency, span, gain and colour scale; under
@@ -58,11 +58,19 @@ which has a narrow artefact of its own (LO leakage, patched over, with a skirt o
 capture and stay dark; 1 MHz below at 4 and 2 MHz), so that line is off the screen. The
 receiver also makes a spur that moves with the LO, at LO + (LO - 2400 MHz) / 3 (2386.67 MHz
 when tuned to 2390): offset tuning goes above the view instead when below would put it on
-the screen, and ``x`` patches it over at any span. Magenta marks
+the screen. Magenta marks
 are the board's own clock harmonics: steady, narrow carriers exactly on multiples of the
-40 MHz crystal and the 48 MHz USB clock (2352, 2360, 2400, 2440, 2448 and 2496 MHz measured; 2448 on battery too);
-``x`` patches them over with the neighbouring level (``X`` in the header), which would also hide
-any real signal on them, so it starts off. At 40 and
+40 MHz crystal and the 48 MHz USB clock (2352, 2360, 2400, 2440, 2448 and 2496 MHz measured; 2448 on battery too).
+
+There are more such lines than any list or formula covers (2416, 2504 and others at fixed
+frequencies, several that move with the LO), but each repeats to the bin and within a few
+tenths of a dB. So ``x`` (on at start, ``X`` in the header) learns them: for the current
+tuning each FFT bin keeps the lower envelope of its level over a couple of seconds, and a bin
+whose envelope stands more than 2 dB above its neighbours' (9 to 24 bins either side) is
+divided by that excess. A steady line drops to the floor around it; a burst on top of it, or
+anywhere else, is left alone (the busiest rows came out the same with it on and off). After a
+retune it relearns, so lines show for a second or two. A real steady carrier is masked too:
+``x`` turns the mask off. At 40 and
 80 MS/s the trace and waterfall are dimmed beyond about 18 MHz either side of it, where the
 analog filters cut reception off. Below come a 30 pixel spectrum trace and the
 waterfall, newest row on top. A ``!`` after the frequency means the PLL reported the
@@ -100,7 +108,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``a``   automatic colour floor on / off
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
 ``p``   speed: bursts per row (peak hold), 8 (at start), 4, 2, 1, 32, 16
-``x``   hide the board's clock harmonics on / off (off at start)
+``x``   mask the receiver's own steady lines on / off (on at start)
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
 ``m``   fixed gain +1
 ``g``   AGC
@@ -146,7 +154,8 @@ Command               Action
 ``$span <MHz>``       80, 40, 16, 8, 4 or 2
 ``$gain <n|auto>``    fixed gain table index or AGC
 ``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
-``$hide on|off``      patch over the clock harmonics (display only)
+``$hide on|off``      the steady-line mask (display only)
+``$post on|off``      ``$bins`` frames after the mask, as drawn, instead of before it
 ``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
                       ``right`` (that edge down, portrait)
 ====================  ===========================================================
@@ -154,7 +163,8 @@ Command               Action
 Spectra and I/Q come back as binary frames between the text lines: ``ESDR``, a 28-byte
 little-endian header (type, sequence number, uptime, LO, sample rate, gain, bursts), the
 payload, then a CRC-32 (see ``struct frame_hdr`` in ``src/main.c``). Spectra are the rows as
-captured, before the LO and clock-harmonic patches: int16 hundredths of a dBFS from -fs/2 up,
+captured, before the LO patch and the steady-line mask (after them with ``$post on``): int16
+hundredths of a dBFS from -fs/2 up,
 the LO in bin 512. I/Q samples are int16 pairs in raw units (-512 to 511).
 
 ``tools/wf_serial.py`` (pyserial; numpy and matplotlib for the data) does the framing:

@@ -16,7 +16,7 @@
  *   p     bursts per row (peak hold): 8 4 2 1 32 16, faster to the right, then slower
  *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
- *   x     hide the board's own clock harmonics on/off
+ *   x     mask the receiver's own steady lines on/off (learned, mask_update())
  *   v     auto-rotate on/off: held upright, the portrait layout, scrolled by the panel
  *
  * The USB console takes the same keys, and lines starting with $ as commands for a host
@@ -138,6 +138,7 @@ static float cbuf[2 * NFFT] __aligned(16);
 static float dsp_w[NFFT] __aligned(16); /* cos, sin of tau i / NFFT, i bit reversed */
 static uint16_t rev[NFFT];
 static bool use_dsp;
+static bool mask_fresh = true; /* relearn the steady-line mask (mask_update()) */
 static float window_gain;
 
 static float row_db[W], trace_db[W];
@@ -158,7 +159,7 @@ static struct {
 	bool trace_reset;
 	bool channels; /* the 2.4 GHz Wi-Fi channel overlay */
 	int peak; /* bursts per row, their per-bin maximum (1: one burst's average) */
-	bool hide_spurs; /* patch over the board's clock harmonics */
+	bool hide_spurs; /* the steady-line mask (mask_update()) */
 	enum esp_sdr_rate rate;
 	int gain; /* ESP_SDR_RX_GAIN_AUTO or a table index */
 	bool help;       /* the key help covers the screen */
@@ -171,6 +172,7 @@ static struct {
 	bool screen;   /* drawing; off leaves more time for the host's captures */
 	int bins_left; /* rows whose full spectrum goes to the console, -1 for all */
 	int iq_left;   /* bursts whose raw I/Q goes to the console */
+	bool bins_post; /* send the spectra after the LO patch and the mask, as drawn */
 	int orient;       /* enum orient: held upright, the portrait layout */
 	bool auto_rotate; /* the orientation follows the accelerometer */
 	bool side_dirty;  /* the portrait layout needs drawing in full */
@@ -194,6 +196,7 @@ static struct {
 	.text = false,
 	.screen = true,
 	.auto_rotate = true,
+	.hide_spurs = true,
 };
 
 /*
@@ -681,7 +684,7 @@ static void draw_help(void)
 		"-  =   COLOUR FLOOR   A  AUTO",
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
-		"X      HIDE OWN CLOCK HARMONICS",
+		"X      MASK STEADY LINES (LEARNED)",
 		"V      AUTO-ROTATE (HOLD UPRIGHT)",
 		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
 		"YELLOW 1-14: WI-FI CHANNELS",
@@ -1378,6 +1381,7 @@ static void handle_key(char k)
 
 static void apply_radio(void)
 {
+	mask_fresh = true;
 	bool wide = st.rate != ESP_SDR_RATE_16MSPS;
 	uint32_t bw_min, bw_max;
 	int ret;
@@ -1674,6 +1678,85 @@ static int capture_psd(void)
 	return (int)segments;
 }
 
+/*
+ * The steady-line mask (x). The board's own clock harmonics and the spurs that ride on the LO
+ * are narrow and steady; where they fall depends on the LO, in ways no one formula covers, but
+ * they repeat to the bin and within a few tenths of a dB. So for the current tuning each bin
+ * keeps the lower envelope of its level (in dB: down fast, up at 2% a row, a couple of seconds),
+ * and a bin whose envelope stands more than MASK_DB above its neighbours' (9 to 24 bins either
+ * side) is a steady line: its power is divided by that excess, which takes the line down to
+ * the floor around it but leaves a burst on top of it. Relearned after every retune; a real
+ * steady carrier is masked too, which is why x turns it off.
+ */
+#define MASK_DB    2.0f
+#define MASK_NEAR  9
+#define MASK_FAR   24
+static int16_t mask_q[NFFT]; /* hundredths of a dB */
+
+/* 10 log10(x) within about 0.02 dB for normal x > 0: the exponent, a parabola over the mantissa. */
+static inline float fast_db(float x)
+{
+	union {
+		float f;
+		uint32_t i;
+	} u = {.f = x};
+	float e = (float)((int)((u.i >> 23) & 0xffU) - 128);
+
+	u.i = (u.i & 0x7fffffU) | 0x3f800000U;
+	return 3.0103f * (e + (-0.34484843f * u.f + 2.02466578f) * u.f - 0.67487759f);
+}
+
+static void mask_update(bool apply)
+{
+	/* re[] is free here (the C FFT's, between captures): the envelope's running sum. */
+	float *csum = re, total = 0.0f;
+
+	for (unsigned int k = 0; k < NFFT; k++) {
+		float x = fast_db(psd[k] + 1e-20f);
+
+		float q = 0.01f * (float)mask_q[k];
+
+		if (mask_fresh) {
+			q = x;
+		} else {
+			q += (x < q ? 0.3f : 0.02f) * (x - q);
+		}
+		mask_q[k] = (int16_t)CLAMP(lroundf(100.0f * q), -32768L, 32767L);
+	}
+	mask_fresh = false;
+	if (!apply) {
+		return;
+	}
+	for (unsigned int k = 0; k < NFFT; k++) {
+		csum[k] = total; /* the sum of mask_q[0] to mask_q[k - 1] */
+		total += 0.01f * (float)mask_q[k];
+	}
+	for (int k = 0; k < (int)NFFT; k++) {
+		/* The mean of the envelope 9 to 24 bins away on both sides (circular). */
+		float sum = 0.0f;
+
+		for (int side = -1; side <= 1; side += 2) {
+			int a = k + side * MASK_NEAR, b = k + side * MASK_FAR;
+			int lo = MIN(a, b), hi = MAX(a, b) + 1;
+
+			if (lo >= 0 && hi <= (int)NFFT) {
+				sum += (hi == (int)NFFT ? total : csum[hi]) - csum[lo];
+			} else {
+				for (int j = lo; j < hi; j++) {
+					sum += 0.01f * (float)mask_q[(unsigned int)((j + (int)NFFT) %
+										     (int)NFFT)];
+				}
+			}
+		}
+		float excess = 0.01f * (float)mask_q[k] -
+			       sum / (float)(2 * (MASK_FAR - MASK_NEAR + 1));
+
+		if (excess > MASK_DB) {
+			psd[k] *= powf(10.0f, -0.1f * excess);
+		}
+	}
+}
+
 static int capture_row(void)
 {
 	/* Zoomed in, each of the zoom rows per redraw takes its share of the peak bursts. */
@@ -1701,47 +1784,17 @@ static int capture_row(void)
 	float sum = 0.0f;
 	unsigned int valid = 0;
 
-	if (st.bins_left != 0) {
+	if (st.bins_left != 0 && !st.bins_post) {
 		send_bins(psd, norm, bursts, (unsigned int)segments);
 	}
 
 	/* The LO leakage and DC residue: the neighbours' mean instead. */
 	psd[0] = psd[1] = psd[NFFT - 1U] = 0.5f * (psd[2] + psd[NFFT - 2U]);
 
-	/* Likewise the clock harmonics, over the Hann window's main lobe. */
-	if (st.hide_spurs) {
-		int lo = lo_khz(), half = fs_khz() / 2;
-
-		FOR_EACH_SPUR(lo - half, lo + half, khz) {
-			int kc = (int)lroundf((float)(khz - lo) * (float)NFFT / (float)fs_khz());
-
-			if (kc >= -2 && kc <= 2) {
-				continue; /* the LO patch has it */
-			}
-			float fill = 0.5f * (psd[(unsigned int)(kc - 3 + (int)NFFT) % NFFT] +
-					     psd[(unsigned int)(kc + 3 + (int)NFFT) % NFFT]);
-
-			for (int k = kc - 2; k <= kc + 2; k++) {
-				psd[(unsigned int)(k + (int)NFFT) % NFFT] = fill;
-			}
-		}
-		/* And the spur that moves with the LO. */
-		int kc = (int)lroundf((float)(lo_spur_khz(lo) - lo) * (float)NFFT / (float)fs_khz());
-
-		if (kc > 2 && kc < (int)NFFT / 2 - 4) {
-			float fill = 0.5f * (psd[(unsigned int)(kc - 3)] + psd[(unsigned int)(kc + 3)]);
-
-			for (int k = kc - 2; k <= kc + 2; k++) {
-				psd[(unsigned int)k] = fill;
-			}
-		} else if (kc < -2 && kc > -(int)NFFT / 2 + 4) {
-			float fill = 0.5f * (psd[(unsigned int)(kc - 3 + (int)NFFT)] +
-					     psd[(unsigned int)(kc + 3 + (int)NFFT)]);
-
-			for (int k = kc - 2; k <= kc + 2; k++) {
-				psd[(unsigned int)(k + (int)NFFT)] = fill;
-			}
-		}
+	/* The board's own steady lines, learned and divided out (mask_update()). */
+	mask_update(st.hide_spurs);
+	if (st.bins_left != 0 && st.bins_post) {
+		send_bins(psd, norm, bursts, (unsigned int)segments);
 	}
 
 	/* Pixel edges in shifted bins (NFFT/2 is the LO). */
@@ -1886,7 +1939,7 @@ static void handle_cmd(char *line)
 	if (*line == '\0') {
 		return;
 	} else if (strcmp(line, "help") == 0) {
-		con_printf("ok help status, bins [n|on|off], iq [n|off], text on|off, "
+		con_printf("ok help status, bins [n|on|off], post on|off, iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
 		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off\n");
 	} else if (strcmp(line, "status") == 0) {
@@ -1895,6 +1948,9 @@ static void handle_cmd(char *line)
 		con_printf("ok bins %d\n", st.bins_left);
 	} else if (strcmp(line, "iq") == 0 && parse_count(arg, &st.iq_left) && st.iq_left >= 0) {
 		con_printf("ok iq %d\n", st.iq_left);
+	} else if (strcmp(line, "post") == 0 && parse_flag(arg, &flag)) {
+		st.bins_post = flag;
+		con_printf("ok post %d\n", st.bins_post);
 	} else if (strcmp(line, "text") == 0 && parse_flag(arg, &flag)) {
 		st.text = flag;
 		con_printf("ok text %d\n", st.text);
