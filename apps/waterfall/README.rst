@@ -26,6 +26,12 @@ most 15 a second, and the screen then scrolls by all of them at once; a key pres
 once. At 16 MHz that is about 24 rows a second with peak hold and 70 without (34 and 115 with
 the screen paused).
 
+Is a line real or the receiver's own? ``s`` sweeps the LO: row by row it steps through -3, -1,
++1, +3, +1 and -1 units (a sixteenth of the span, at most 1 MHz) around the tuning while the
+view stays put. A real signal, and the board's clock harmonics, draw a straight line; the LO's
+own line and the spurs that ride on it zigzag. Each step retunes, about 10% fewer rows, and
+at 16 MHz and wider each row loses a strip at one edge where the capture no longer reaches.
+
 Held upright (either edge down, past about 60 degrees; back to landscape within about 30 degrees
 of upright, so it does not flip back and forth), the BMI270 accelerometer switches to a portrait
 layout laid out as the landscape one: the settings on two lines, the scale, and the trace with
@@ -99,6 +105,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``m``   fixed gain +1
 ``g``   AGC
 ``v``   automatic portrait layout when held upright on / off
+``s``   LO sweep on / off (``S`` in the header)
 ======  ===========================================
 
 Wi-Fi channels 1 to 14 are always labelled at the top of the spectrum trace, each number
@@ -141,6 +148,7 @@ Command               Action
 ``$gain <n|auto>``    fixed gain table index or AGC
 ``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
 ``$hide on|off``      patch over the clock harmonics (display only)
+``$sweep on|off``     the LO sweep
 ``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
                       ``right`` (that edge down, portrait)
 ====================  ===========================================================
