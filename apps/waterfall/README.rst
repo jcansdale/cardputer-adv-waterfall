@@ -75,8 +75,6 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``/``   scroll right by 1/8 screen (right arrow)
 ``;``   narrower span, down to 2 MHz (up arrow)
 ``.``   wider span, up to 80 MHz (down arrow)
-``j``   frequency -10 MHz
-``k``   frequency +10 MHz
 ``h``   back to 2440 MHz, 16 MHz span
 ``-``   colour floor -2 dB (manual)
 ``=``   colour floor +2 dB (manual)

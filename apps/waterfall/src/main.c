@@ -11,7 +11,7 @@
  *
  * Keys (Cardputer arrows are ; . , /):
  *   , /   scroll left / right        ; .   span 80/40/16/8/4/2 MHz narrower / wider
- *   j k   frequency -10 / +10 MHz    h     back to 2440 MHz, 16 MHz span
+ *   h     back to 2440 MHz, 16 MHz span
  *   w     Wi-Fi channel overlay on/off
  *   p     peak hold over PEAK_BURSTS bursts on/off
  *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
@@ -627,7 +627,7 @@ static void draw_help(void)
 		"KEYS                  ESC: CLOSE",
 		",  /   SCROLL       (LEFT/RIGHT)",
 		";  .   SPAN 80-2 MHZ (UP/DOWN)",
-		"J  K   -10/+10 MHZ    H  HOME",
+		"H      HOME (2440 MHZ, 16 MHZ SPAN)",
 		"N  M   GAIN -/+       G  AGC",
 		"-  =   COLOUR FLOOR   A  AUTO",
 		"[  ]   COLOUR RANGE",
@@ -1274,12 +1274,6 @@ static void handle_key(char k)
 		break;
 	case '.':
 		set_span(MAX(st.span_i - 1, 0));
-		break;
-	case 'j':
-		st.view_khz -= 10000;
-		break;
-	case 'k':
-		st.view_khz += 10000;
 		break;
 	case 'h':
 		st.view_khz = FREQ_DEFAULT_MHZ * 1000;
