@@ -58,7 +58,8 @@ which has a narrow artefact of its own (LO leakage, patched over, with a skirt o
 capture and stay dark; 1 MHz below at 4 and 2 MHz), so that line is off the screen. The
 receiver also makes a spur that moves with the LO, at LO + (LO - 2400 MHz) / 3 (2386.67 MHz
 when tuned to 2390): offset tuning goes above the view instead when below would put it on
-the screen. Magenta marks
+the screen. Scrolling keeps the tuning while it still serves (the view inside the capture,
+the LO and its spur off it), so at 4 and 2 MHz most steps do not retune. Magenta marks
 are the board's own clock harmonics: steady, narrow carriers exactly on multiples of the
 40 MHz crystal and the 48 MHz USB clock (2352, 2360, 2400, 2440, 2448 and 2496 MHz measured; 2448 on battery too).
 
@@ -68,9 +69,12 @@ tenths of a dB. So ``x`` (on at start, ``X`` in the header) learns them: for the
 tuning each FFT bin keeps the lower envelope of its level over a couple of seconds, and a bin
 whose envelope stands more than 2 dB above its neighbours' (9 to 24 bins either side) is
 divided by that excess. A steady line drops to the floor around it; a burst on top of it, or
-anywhere else, is left alone (the busiest rows came out the same with it on and off). After a
-retune it relearns, so lines show for a second or two. A real steady carrier is masked too:
-``x`` turns the mask off. At 40 and
+anywhere else, is left alone (the busiest rows came out the same with it on and off). The
+LO's own line is bridged over 120 kHz either side, and its skirt, a smooth bump of +3 dB at
+125 kHz falling to +1 dB at 500 kHz, is flattened the same way against the ring from 600 to
+1200 kHz out. After a retune the mask relearns over 40 rows; the last 24 tunings' masks are
+kept (their 64 strongest bins), so going back to one applies its mask at once. A real steady
+carrier is masked too: ``x`` turns the mask off. At 40 and
 80 MS/s the trace and waterfall are dimmed beyond about 18 MHz either side of it, where the
 analog filters cut reception off. Below come a 30 pixel spectrum trace and the
 waterfall, newest row on top. A ``!`` after the frequency means the PLL reported the

@@ -125,7 +125,7 @@ static const struct {
 static const struct device *const display = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 static const struct device *const console = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 
-static float re[NFFT], im[NFFT], window[NFFT], psd[NFFT], peak[NFFT];
+static float window[NFFT], psd[NFFT], peak[NFFT];
 static float tw_cos[NFFT / 2], tw_sin[NFFT / 2];
 
 /*
@@ -139,6 +139,7 @@ static float dsp_w[NFFT] __aligned(16); /* cos, sin of tau i / NFFT, i bit rever
 static uint16_t rev[NFFT];
 static bool use_dsp;
 static bool mask_fresh = true; /* relearn the steady-line mask (mask_update()) */
+static void mask_retune(int lo, int rate);
 static float window_gain;
 
 static float row_db[W], trace_db[W];
@@ -405,8 +406,18 @@ static void follow_view(void)
 	if (st.zoom > 1) {
 		int a = st.view_khz - span / 2, b = st.view_khz + span / 2;
 		int gap = st.zoom == 2 ? 250 : 1000, below = a - gap;
-		int spur = lo_spur_khz(below);
+		int spur = lo_spur_khz(lo);
 
+		/*
+		 * Keep the tuning while it still serves (fewer retunes, and the steady-line mask
+		 * stays learned): the LO 200 kHz or more off the view, the view within the capture
+		 * (or as far over its edge as the 8 MHz placement goes), its spur off the view.
+		 */
+		if ((lo < a - 200 || lo > b + 200) && a >= lo - half - 250 && b <= lo + half + 250 &&
+		    (spur < a - 150 || spur > b + 150) && st.rate == ESP_SDR_RATE_16MSPS) {
+			return;
+		}
+		spur = lo_spur_khz(below);
 		set_lo_khz(spur > a - 150 && spur < b + 150 ? b + gap : below);
 	} else if (st.view_khz - span / 2 < lo - half || st.view_khz + span / 2 > lo + half) {
 		set_lo_khz((st.view_khz + 500) / 1000 * 1000);
@@ -1381,7 +1392,7 @@ static void handle_key(char k)
 
 static void apply_radio(void)
 {
-	mask_fresh = true;
+	mask_retune(lo_khz(), (int)st.rate);
 	bool wide = st.rate != ESP_SDR_RATE_16MSPS;
 	uint32_t bw_min, bw_max;
 	int ret;
@@ -1599,6 +1610,7 @@ static void fft_init(void)
 /* Two tones, either side of DC: the kernel must agree with the C FFT, mirror included. */
 static void fft_check(void)
 {
+	float *re = psd, *im = peak; /* free at boot */
 	float err = 0.0f, top = 0.0f;
 	uint32_t t0, t_dsp, t_c;
 
@@ -1666,6 +1678,8 @@ static int capture_psd(void)
 			}
 			continue;
 		}
+		float *re = cbuf, *im = &cbuf[NFFT]; /* the C FFT: cbuf's halves */
+
 		for (unsigned int k = 0; k < NFFT; k++) {
 			re[k] = ((float)esp_sdr_rx_i(w[k]) - dc_i) * window[k];
 			im[k] = ((float)esp_sdr_rx_q(w[k]) - dc_q) * window[k];
@@ -1689,6 +1703,7 @@ static int capture_psd(void)
  * steady carrier is masked too, which is why x turns it off.
  */
 #define MASK_DB    2.0f
+#define MASK_WARM  40 /* rows before the live mask takes over from a remembered one */
 #define MASK_NEAR  9
 #define MASK_FAR   24
 static int16_t mask_q[NFFT]; /* hundredths of a dB */
@@ -1706,14 +1721,143 @@ static inline float fast_db(float x)
 	return 3.0103f * (e + (-0.34484843f * u.f + 2.02466578f) * u.f - 0.67487759f);
 }
 
-static void mask_update(bool apply)
+/*
+ * The masks of the last MASK_TUNINGS tunings, each as its MASK_LINES strongest bins: back at
+ * one, its mask applies at once while the live one relearns (MASK_WARM rows).
+ */
+#define MASK_TUNINGS 24
+#define MASK_LINES   64
+static struct mask_entry {
+	int32_t lo_khz;
+	uint8_t rate, n;
+	uint16_t used;
+	uint16_t bin[MASK_LINES];
+	int16_t cdb[MASK_LINES]; /* the excess, hundredths of a dB */
+} mask_cache[MASK_TUNINGS];
+static const struct mask_entry *mask_seed;
+static int mask_lo_khz = -1, mask_rate = -1, mask_rows;
+static uint16_t mask_clock;
+
+/* The envelope's excess over its neighbours' at bin k; csum from mask_csum(). */
+static float mask_excess(const float *csum, float total, int k)
 {
-	/* re[] is free here (the C FFT's, between captures): the envelope's running sum. */
-	float *csum = re, total = 0.0f;
+	float sum = 0.0f;
+
+	for (int side = -1; side <= 1; side += 2) {
+		int a = k + side * MASK_NEAR, b = k + side * MASK_FAR;
+		int lo = MIN(a, b), hi = MAX(a, b) + 1;
+
+		if (lo >= 0 && hi <= (int)NFFT) {
+			sum += (hi == (int)NFFT ? total : csum[hi]) - csum[lo];
+		} else {
+			for (int j = lo; j < hi; j++) {
+				sum += 0.01f * (float)mask_q[(unsigned int)((j + (int)NFFT) % (int)NFFT)];
+			}
+		}
+	}
+	return 0.01f * (float)mask_q[k] - sum / (float)(2 * (MASK_FAR - MASK_NEAR + 1));
+}
+
+/* csum[k]: the envelope summed over bins 0 to k - 1; returns the total. */
+static float mask_csum(float *csum)
+{
+	float total = 0.0f;
 
 	for (unsigned int k = 0; k < NFFT; k++) {
-		float x = fast_db(psd[k] + 1e-20f);
+		csum[k] = total;
+		total += 0.01f * (float)mask_q[k];
+	}
+	return total;
+}
 
+/* At a retune (between rows, peak[] free): keep the learned mask, then look up the new one. */
+static void mask_retune(int lo, int rate)
+{
+	if (mask_rows >= MASK_WARM && mask_lo_khz >= 0) {
+		struct mask_entry *e = NULL, *oldest = &mask_cache[0];
+		float total = mask_csum(peak);
+
+		for (int i = 0; i < MASK_TUNINGS; i++) {
+			if (mask_cache[i].lo_khz == mask_lo_khz && mask_cache[i].rate == mask_rate) {
+				e = &mask_cache[i];
+			}
+			if ((uint16_t)(mask_clock - mask_cache[i].used) >
+			    (uint16_t)(mask_clock - oldest->used)) {
+				oldest = &mask_cache[i];
+			}
+		}
+		e = e != NULL ? e : oldest;
+		e->lo_khz = mask_lo_khz;
+		e->rate = (uint8_t)mask_rate;
+		e->used = mask_clock++;
+		e->n = 0;
+		for (int k = 0; k < (int)NFFT; k++) {
+			float x = mask_excess(peak, total, k);
+			int slot = e->n;
+
+			if (x <= MASK_DB) {
+				continue;
+			}
+			if (slot == MASK_LINES) { /* full: replace the weakest if weaker */
+				slot = 0;
+				for (int j = 1; j < MASK_LINES; j++) {
+					slot = e->cdb[j] < e->cdb[slot] ? j : slot;
+				}
+				if (e->cdb[slot] >= (int16_t)(100.0f * x)) {
+					continue;
+				}
+			} else {
+				e->n++;
+			}
+			e->bin[slot] = (uint16_t)k;
+			e->cdb[slot] = (int16_t)MIN(100.0f * x, 32767.0f);
+		}
+	}
+	mask_seed = NULL;
+	for (int i = 0; i < MASK_TUNINGS; i++) {
+		if (mask_cache[i].n > 0 && mask_cache[i].lo_khz == lo && mask_cache[i].rate == rate) {
+			mask_seed = &mask_cache[i];
+			mask_cache[i].used = mask_clock++;
+		}
+	}
+	mask_lo_khz = lo;
+	mask_rate = rate;
+	mask_rows = 0;
+	mask_fresh = true;
+}
+
+/*
+ * The LO's skirt: a smooth bump, +3 dB at 125 kHz and +1 at 500 kHz either side (the same at
+ * every LO, its height relative to the floor not with the gain), too broad for the line mask.
+ * Within 600 kHz each bin is divided by its envelope's excess (over three bins) over the mean
+ * envelope of the ring from 600 to 1200 kHz out.
+ */
+static void mask_skirt(void)
+{
+	int r = 600 * (int)NFFT / fs_khz();
+	float base = 0.0f;
+
+	for (int j = r + 1; j <= 2 * r; j++) {
+		base += 0.01f * (float)(mask_q[(unsigned int)j] + mask_q[NFFT - (unsigned int)j]);
+	}
+	base /= (float)(2 * r);
+	for (int k = -r; k <= r; k++) {
+		float e = 0.0f;
+
+		for (int j = k - 1; j <= k + 1; j++) {
+			e += 0.01f * (float)mask_q[(unsigned int)((j + (int)NFFT) % (int)NFFT)];
+		}
+		e = e / 3.0f - base;
+		if (e > 0.3f) {
+			psd[(unsigned int)((k + (int)NFFT) % (int)NFFT)] *= powf(10.0f, -0.1f * e);
+		}
+	}
+}
+
+static void mask_update(bool apply)
+{
+	for (unsigned int k = 0; k < NFFT; k++) {
+		float x = fast_db(psd[k] + 1e-20f);
 		float q = 0.01f * (float)mask_q[k];
 
 		if (mask_fresh) {
@@ -1724,32 +1868,22 @@ static void mask_update(bool apply)
 		mask_q[k] = (int16_t)CLAMP(lroundf(100.0f * q), -32768L, 32767L);
 	}
 	mask_fresh = false;
+	mask_rows++;
 	if (!apply) {
 		return;
 	}
-	for (unsigned int k = 0; k < NFFT; k++) {
-		csum[k] = total; /* the sum of mask_q[0] to mask_q[k - 1] */
-		total += 0.01f * (float)mask_q[k];
-	}
-	for (int k = 0; k < (int)NFFT; k++) {
-		/* The mean of the envelope 9 to 24 bins away on both sides (circular). */
-		float sum = 0.0f;
-
-		for (int side = -1; side <= 1; side += 2) {
-			int a = k + side * MASK_NEAR, b = k + side * MASK_FAR;
-			int lo = MIN(a, b), hi = MAX(a, b) + 1;
-
-			if (lo >= 0 && hi <= (int)NFFT) {
-				sum += (hi == (int)NFFT ? total : csum[hi]) - csum[lo];
-			} else {
-				for (int j = lo; j < hi; j++) {
-					sum += 0.01f * (float)mask_q[(unsigned int)((j + (int)NFFT) %
-										     (int)NFFT)];
-				}
-			}
+	mask_skirt();
+	if (mask_rows < MASK_WARM && mask_seed != NULL) {
+		for (int i = 0; i < mask_seed->n; i++) {
+			psd[mask_seed->bin[i]] *= powf(10.0f, -0.001f * (float)mask_seed->cdb[i]);
 		}
-		float excess = 0.01f * (float)mask_q[k] -
-			       sum / (float)(2 * (MASK_FAR - MASK_NEAR + 1));
+		return;
+	}
+	/* peak[] is free here (copied to psd[]): the envelope's running sum. */
+	float total = mask_csum(peak);
+
+	for (int k = 0; k < (int)NFFT; k++) {
+		float excess = mask_excess(peak, total, k);
 
 		if (excess > MASK_DB) {
 			psd[k] *= powf(10.0f, -0.1f * excess);
@@ -1788,8 +1922,25 @@ static int capture_row(void)
 		send_bins(psd, norm, bursts, (unsigned int)segments);
 	}
 
-	/* The LO leakage and DC residue: the neighbours' mean instead. */
-	psd[0] = psd[1] = psd[NFFT - 1U] = 0.5f * (psd[2] + psd[NFFT - 2U]);
+	/*
+	 * The LO leakage and DC residue, with the skirt around them (+3 dB out to about 110 kHz at
+	 * every LO): bridged over 120 kHz either side, from the mean of three bins beyond each end.
+	 */
+	{
+		int w = (int)ceilf(120.0f * (float)NFFT / (float)fs_khz());
+		float l = 0.0f, r = 0.0f;
+
+		for (int j = 1; j <= 3; j++) {
+			l += psd[(unsigned int)((int)NFFT - w - j)];
+			r += psd[(unsigned int)(w + j)];
+		}
+		l /= 3.0f;
+		r /= 3.0f;
+		for (int k = -w; k <= w; k++) {
+			psd[(unsigned int)((k + (int)NFFT) % (int)NFFT)] =
+				l + (r - l) * (float)(k + w + 1) / (float)(2 * w + 2);
+		}
+	}
 
 	/* The board's own steady lines, learned and divided out (mask_update()). */
 	mask_update(st.hide_spurs);
