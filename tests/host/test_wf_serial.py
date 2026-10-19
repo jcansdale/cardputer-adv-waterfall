@@ -39,7 +39,8 @@ class FakeSerial:
 
 def link(ser):
     lk = wf.Link.__new__(wf.Link)
-    lk.ser, lk.buf, lk.bad, lk.verbose, lk.paused = ser, bytearray(), 0, False, False
+    lk.ser, lk.buf, lk.bad, lk.verbose = ser, bytearray(), 0, False
+    lk.paused = lk.text = False
     return lk
 
 

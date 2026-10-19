@@ -77,6 +77,7 @@ class Link:
         self.bad = 0
         self.verbose = verbose
         self.paused = False
+        self.text = False
 
     def send(self, line):
         if line.startswith("$"):
@@ -157,8 +158,11 @@ class Link:
         while time.time() < end:
             try:
                 self.ser.write(b"\n")  # ends a half-typed command
-                self.command("$text off", timeout=1.0)
-                return self.command("$status")
+                self.status = self.command("$status", timeout=1.0)
+                self.text = " text 1 " in self.status
+                if self.text:
+                    self.command("$text off", timeout=1.0)
+                return self.status
             except TimeoutError:
                 pass
         sys.exit("the app does not answer on " + self.ser.port)
@@ -188,7 +192,8 @@ class Link:
         try:
             self.command("$bins off", timeout=1.0)
             self.command("$iq off", timeout=1.0)
-            self.command("$text on", timeout=1.0)
+            if self.text:
+                self.command("$text on", timeout=1.0)
             if self.paused:
                 self.command("$screen on", timeout=1.0)
         except TimeoutError:
@@ -217,13 +222,15 @@ def collect_bins(link, n):
 
 
 def cmd_status(link, args):
-    print(link.command("$status"))
+    print(link.status)  # as found, before the tool silenced the text lines
 
 
 def cmd_cmd(link, args):
     for line in args.lines:
         if line.startswith("$"):
             print(link.command(line))
+            if line.split()[0] == "$text":
+                link.text = False  # the user's choice stays
         else:
             link.send(line)
     time.sleep(0.3)

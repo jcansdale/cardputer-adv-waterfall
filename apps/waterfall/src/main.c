@@ -78,6 +78,12 @@ SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
 #define SAMPLES   4096U
 
 /*
+ * A redraw takes about 25 ms, two captures' worth: rows are captured until a frame is due and
+ * the screen then scrolls by all of them at once. Input redraws at once.
+ */
+#define FRAME_MS 66U
+
+/*
  * One ladder of screen spans for the zoom keys: each takes the narrowest sample rate that
  * covers it (the finest bins), and the narrow ones a part of the 16 MS/s capture.
  */
@@ -156,7 +162,11 @@ static struct {
 	.floor_db = -100.0f,
 	.range_db = 40.0f,
 	.dirty_radio = true,
-	.text = true,
+	/*
+	 * Off: the screen hitches each time one goes out (a pause every few seconds, cause not
+	 * found; the binary frames, larger and more frequent, do not do it).
+	 */
+	.text = false,
 	.screen = true,
 };
 
@@ -1205,13 +1215,17 @@ static void dump_spectrum(void)
 
 /* ---- console commands ---- */
 
+/* The main loop's longest pass since the last status, in ms: hesitations on the screen. */
+static uint32_t loop_max_ms;
+
 static void print_status(void)
 {
 	con_printf("stat lo %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
-	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d\n",
+	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d loop_max %u\n",
 	       st.lo_mhz, st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak_hold,
 	       st.hide_spurs, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
-	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left);
+	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, (unsigned int)loop_max_ms);
+	loop_max_ms = 0U;
 }
 
 static bool parse_flag(const char *a, bool *out)
@@ -1382,16 +1396,22 @@ int main(void)
 
 	last_ms = k_uptime_get_32();
 	last_dump_ms = last_ms;
+	uint32_t last_draw_ms = last_ms;
+	uint32_t loop_ms = last_ms;
+
 	for (;;) {
 		static char cmd[64];
 		static int cmd_len = -1; /* -1: not in a $ command */
+		bool input = false;
 		char k;
 		unsigned char ck;
 
 		while ((k = kbd_poll()) != 0) {
 			handle_key(k);
+			input = true;
 		}
 		while (uart_poll_in(console, &ck) == 0) {
+			input = true;
 			if (cmd_len < 0) {
 				if (ck == '$') {
 					cmd_len = 0;
@@ -1420,7 +1440,18 @@ int main(void)
 			k_msleep(100);
 			continue;
 		}
-		if (!st.screen) {
+		uint32_t now = k_uptime_get_32();
+
+		loop_max_ms = MAX(loop_max_ms, now - loop_ms);
+		loop_ms = now;
+		bool draw = input || now - last_draw_ms >= FRAME_MS;
+
+		if (draw) {
+			last_draw_ms = now;
+		}
+		if (!draw) {
+			/* Drawn with the next frame. */
+		} else if (!st.screen) {
 			/* Paused for the host (the history still fills): say so once. */
 			if (!st.help_drawn) {
 				draw_header();
@@ -1434,8 +1465,6 @@ int main(void)
 		} else if (!st.help_drawn) {
 			draw_help();
 		}
-
-		uint32_t now = k_uptime_get_32();
 
 		if (now - last_dump_ms >= 2000U && st.text) {
 			dump_spectrum();

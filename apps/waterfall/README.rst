@@ -19,6 +19,11 @@ instead of one, each taking its share of the peak hold's bursts (8 at 16 MHz, 1 
 Scrolling past the captured span retunes the radio, and the waterfall history is shifted and
 rescaled to stay lined up.
 
+A redraw takes about 25 ms (the display runs at 40 MHz SPI), about two captures without peak
+hold, so rows are captured until a frame is due, at most 15 a second, and the screen then
+scrolls by all of them at once; a key press redraws at once. Without peak hold that is about
+50 rows a second at 16 MHz, against 26 drawing every row.
+
 Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by default
 each row is the per-bin maximum over 8 bursts (peak hold, ``P`` in the header); ``p`` turns
 it off for a plain average.
@@ -85,9 +90,11 @@ which connected devices hop between. The
 overlay adds dotted lines through the trace and waterfall (cyan for Bluetooth) and tints the
 20 MHz of the non-overlapping Wi-Fi channels 1, 6 and 11 in the trace.
 
-The view centre is limited to 1800 to 2800 MHz. The keys also work typed on the USB console,
-and every 2 s the console prints a ``spec`` line: the view, then the 240 pixels' maximum in dB
-since the previous line. Every key press is logged with its raw TCA8418 event on the console,
+The view centre is limited to 1800 to 2800 MHz. The keys also work typed on the USB console.
+With ``$text on`` (below) the console prints a ``spec`` line every 2 s: the view, then the 240
+pixels' maximum in dB since the previous line, and the rows per second every 5 s. They are off
+by default: the screen hitches each time one goes out, a pause every few seconds (the binary
+frames, larger and more frequent, do not do it; the cause is not known). Every key press is logged with its raw TCA8418 event on the console,
 which helps if the key map needs adjusting.
 
 Host interface
@@ -101,10 +108,11 @@ answers with one ``ok <command> ...`` or ``err <command> ...`` line (``stat ...`
 Command               Action
 ====================  ===========================================================
 ``$help``             list the commands
-``$status``           the state: LO, view, span, rate, zoom, gain, peak hold, ...
+``$status``           the state: LO, view, span, rate, zoom, gain, peak hold, ...,
+                      and the main loop's longest pass since the last ``$status``
 ``$bins [n|on|off]``  send the next n rows' (default 1) full 1024-bin spectra
 ``$iq [n|off]``       send the next n bursts' raw I/Q (4096 samples each)
-``$text on|off``      the periodic ``spec`` and status lines
+``$text on|off``      the periodic ``spec`` and status lines (default off)
 ``$screen on|off``    drawing; without it rows come up to 4 times faster
 ``$tune <kHz>``       the view centre (retunes as needed)
 ``$lo <MHz>``         the LO alone, the view staying put when it fits
