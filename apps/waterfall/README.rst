@@ -55,7 +55,10 @@ fit. A white mark under the scale is the view centre; a red one is where the rad
 which has a narrow artefact of its own (LO leakage, patched over, with a skirt of about
 +-110 kHz) to ignore. Zoomed in to 8, 4 or 2 MHz the radio tunes just below the view instead
 (offset tuning: 250 kHz below at 8 MHz, whose last 250 kHz on the right are then beyond the
-capture and stay dark; 1 MHz below at 4 and 2 MHz), so that line is off the screen. Magenta marks
+capture and stay dark; 1 MHz below at 4 and 2 MHz), so that line is off the screen. The
+receiver also makes a spur that moves with the LO, at LO + (LO - 2400 MHz) / 3 (2386.67 MHz
+when tuned to 2390): offset tuning goes above the view instead when below would put it on
+the screen, and ``x`` patches it over at any span. Magenta marks
 are the board's own clock harmonics: steady, narrow carriers exactly on multiples of the
 40 MHz crystal and the 48 MHz USB clock (2352, 2360, 2400, 2440, 2448 and 2496 MHz measured; 2448 on battery too);
 ``x`` patches them over with the neighbouring level (``X`` in the header), which would also hide

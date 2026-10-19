@@ -380,17 +380,31 @@ static void set_lo_khz(int khz)
 }
 
 /*
+ * The receiver's own spur that moves with the LO: at LO + (LO - 2400 MHz) / 3, measured
+ * within 5 kHz at LOs from 2380 to 2421 MHz (2386.67 at 2390, 2416 at 2412, 2428 at 2421).
+ */
+static int lo_spur_khz(int lo)
+{
+	return lo + (lo - 2400000) / 3;
+}
+
+/*
  * Retune when the view leaves the span the radio captures. Zoomed in (8, 4, 2 MHz of the
- * 16 MS/s capture), offset tuning: the LO sits just below the view (250 kHz at 8 MHz, the
- * capture then ends 250 kHz short of its right edge; 1 MHz at 4 and 2), so its line and the
+ * 16 MS/s capture), offset tuning: the LO sits just outside the view (250 kHz at 8 MHz, the
+ * capture then ends 250 kHz short of the far edge; 1 MHz at 4 and 2), so its line and the
  * skirt around it (+3 dB out to about 110 kHz, the same at every LO) stay off the screen.
+ * Below the view, unless that puts lo_spur_khz() in it: then above.
  */
 static void follow_view(void)
 {
 	int half = fs_khz() / 2, span = span_khz(), lo = lo_khz();
 
 	if (st.zoom > 1) {
-		set_lo_khz(st.view_khz - span / 2 - (st.zoom == 2 ? 250 : 1000));
+		int a = st.view_khz - span / 2, b = st.view_khz + span / 2;
+		int gap = st.zoom == 2 ? 250 : 1000, below = a - gap;
+		int spur = lo_spur_khz(below);
+
+		set_lo_khz(spur > a - 150 && spur < b + 150 ? b + gap : below);
 	} else if (st.view_khz - span / 2 < lo - half || st.view_khz + span / 2 > lo + half) {
 		set_lo_khz((st.view_khz + 500) / 1000 * 1000);
 	}
@@ -1709,6 +1723,23 @@ static int capture_row(void)
 
 			for (int k = kc - 2; k <= kc + 2; k++) {
 				psd[(unsigned int)(k + (int)NFFT) % NFFT] = fill;
+			}
+		}
+		/* And the spur that moves with the LO. */
+		int kc = (int)lroundf((float)(lo_spur_khz(lo) - lo) * (float)NFFT / (float)fs_khz());
+
+		if (kc > 2 && kc < (int)NFFT / 2 - 4) {
+			float fill = 0.5f * (psd[(unsigned int)(kc - 3)] + psd[(unsigned int)(kc + 3)]);
+
+			for (int k = kc - 2; k <= kc + 2; k++) {
+				psd[(unsigned int)k] = fill;
+			}
+		} else if (kc < -2 && kc > -(int)NFFT / 2 + 4) {
+			float fill = 0.5f * (psd[(unsigned int)(kc - 3 + (int)NFFT)] +
+					     psd[(unsigned int)(kc + 3 + (int)NFFT)]);
+
+			for (int k = kc - 2; k <= kc + 2; k++) {
+				psd[(unsigned int)(k + (int)NFFT)] = fill;
 			}
 		}
 	}
