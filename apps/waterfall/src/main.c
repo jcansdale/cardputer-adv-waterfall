@@ -18,7 +18,6 @@
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  *   x     hide the board's own clock harmonics on/off
  *   v     auto-rotate on/off: held upright, the portrait layout, scrolled by the panel
- *   s     LO sweep on/off: real signals stay put, the receiver's own artefacts zigzag
  *
  * The USB console takes the same keys, and lines starting with $ as commands for a host
  * (tools/wf_serial.py): full 1024-bin spectra and raw I/Q bursts come back as binary frames
@@ -174,8 +173,6 @@ static struct {
 	int orient;       /* enum orient: held upright, the portrait layout */
 	bool auto_rotate; /* the orientation follows the accelerometer */
 	bool side_dirty;  /* the portrait layout needs drawing in full */
-	bool sweep;       /* the LO zigzags around lo_mhz, row by row (s) */
-	int lo_ofs_khz;   /* the offset the radio is tuned at now */
 } st = {
 	.lo_mhz = FREQ_DEFAULT_MHZ,
 	.view_khz = FREQ_DEFAULT_MHZ * 1000,
@@ -387,9 +384,9 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d", st.view_khz / 1000,
+	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c G:%s %c%d/%d", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
-		 st.hide_spurs ? 'X' : ' ', st.sweep ? 'S' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
+		 st.hide_spurs ? 'X' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
 		 (int)st.range_db);
 	if (!st.screen) {
 		snprintf(line, sizeof(line), "SCREEN PAUSED BY HOST");
@@ -648,7 +645,7 @@ static void draw_help(void)
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
 		"X      HIDE OWN CLOCK HARMONICS",
-		"V  AUTO-ROTATE      S  LO SWEEP",
+		"V      AUTO-ROTATE (HOLD UPRIGHT)",
 		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
 		"YELLOW 1-14: WI-FI CHANNELS",
 		"CYAN B37-39: BLUETOOTH LE ADVERTISING",
@@ -964,9 +961,8 @@ static void side_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "G:%d", st.gain);
 	}
-	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c%c", st.view_khz / 1000,
-		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
-		 st.hide_spurs ? 'X' : ' ', st.sweep ? 'S' : ' ');
+	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c", st.view_khz / 1000, st.view_khz % 1000,
+		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.hide_spurs ? 'X' : ' ');
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
 	snprintf(text, sizeof(text), "%s %c%d/%d", gain, st.auto_floor ? 'A' : 'L',
 		 (int)st.floor_db, (int)st.range_db);
@@ -1324,9 +1320,6 @@ static void handle_key(char k)
 	case 'v':
 		st.auto_rotate = !st.auto_rotate;
 		return;
-	case 's':
-		st.sweep = !st.sweep;
-		return;
 	case 'g':
 		st.gain = ESP_SDR_RX_GAIN_AUTO;
 		st.dirty_radio = true;
@@ -1471,7 +1464,7 @@ static void frame_begin(uint8_t type, uint16_t count, uint32_t len, unsigned int
 		.count = sys_cpu_to_le16(count),
 		.seq = sys_cpu_to_le32(frame_seq++),
 		.ms = sys_cpu_to_le32(k_uptime_get_32()),
-		.lo_khz = (int32_t)sys_cpu_to_le32((uint32_t)(st.lo_mhz * 1000 + st.lo_ofs_khz)),
+		.lo_khz = (int32_t)sys_cpu_to_le32((uint32_t)(st.lo_mhz * 1000)),
 		.fs_hz = sys_cpu_to_le32(esp_sdr_rx_rate_hz(st.rate)),
 		.gain = (int16_t)sys_cpu_to_le16((uint16_t)st.gain),
 		.bursts = (uint8_t)bursts,
@@ -1640,35 +1633,8 @@ static int capture_psd(void)
 	return (int)segments;
 }
 
-/*
- * The sweep: row by row the LO steps through -3, -1, +1, +3, +1, -1 units (a sixteenth of the
- * span, at most 1 MHz) around lo_mhz, a few ms of retuning each. The view stays put, so a
- * real signal draws a straight line while the receiver's own artefacts (the LO, its spurs)
- * zigzag with it; the rows lose a strip at one edge where the capture no longer reaches.
- */
-static void sweep_step(void)
-{
-	static const int8_t tri[] = {-3, -1, 1, 3, 1, -1};
-	static unsigned int i;
-	int want = 0;
-
-	if (st.sweep) {
-		want = tri[i++ % ARRAY_SIZE(tri)] * MIN(span_khz() / 16, 1000);
-	}
-	if (want != st.lo_ofs_khz) {
-		int ret = esp_sdr_set_freq_offset(want);
-
-		if (ret != 0 && ret != -ERANGE) {
-			LOG_WRN("sweep offset %d: %d", want, ret);
-		}
-		st.lo_ofs_khz = want;
-	}
-}
-
 static int capture_row(void)
 {
-	sweep_step();
-
 	/* Zoomed in, each of the zoom rows per redraw takes its share of the peak bursts. */
 	unsigned int bursts = MAX((unsigned int)st.peak / (unsigned int)st.zoom, 1U);
 	int segments = 0;
@@ -1703,7 +1669,7 @@ static int capture_row(void)
 
 	/* Likewise the clock harmonics, over the Hann window's main lobe. */
 	if (st.hide_spurs) {
-		int lo = st.lo_mhz * 1000 + st.lo_ofs_khz, half = fs_khz() / 2;
+		int lo = st.lo_mhz * 1000, half = fs_khz() / 2;
 
 		FOR_EACH_SPUR(lo - half, lo + half, khz) {
 			int kc = (int)lroundf((float)(khz - lo) * (float)NFFT / (float)fs_khz());
@@ -1723,8 +1689,7 @@ static int capture_row(void)
 	/* Pixel edges in shifted bins (NFFT/2 is the LO). */
 	float bin_khz = (float)fs_khz() / (float)NFFT;
 	float px_bins = (float)span_khz() / (float)W / bin_khz;
-	float left = (float)(st.view_khz - span_khz() / 2 - st.lo_mhz * 1000 - st.lo_ofs_khz) /
-			     bin_khz +
+	float left = (float)(st.view_khz - span_khz() / 2 - st.lo_mhz * 1000) / bin_khz +
 		     (float)(NFFT / 2U);
 
 	for (unsigned int c = 0; c < W; c++) {
@@ -1794,10 +1759,10 @@ static uint32_t loop_max_ms;
 static void print_status(void)
 {
 	con_printf("stat lo %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
-	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d sweep %d orient %d rotate %d acc %d %d %d loop_max %u\n",
+	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d orient %d rotate %d acc %d %d %d loop_max %u\n",
 	       st.lo_mhz, st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
 	       st.hide_spurs, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
-	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.sweep, st.orient, st.auto_rotate,
+	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.orient, st.auto_rotate,
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
 	       (unsigned int)loop_max_ms);
 	loop_max_ms = 0U;
@@ -1865,7 +1830,7 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
-		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off, sweep on|off\n");
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
 	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
@@ -1936,9 +1901,6 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "peak") == 0 && parse_flag(arg, &flag)) {
 		st.peak = flag ? PEAK_BURSTS : 1;
 		con_printf("ok peak %d\n", st.peak);
-	} else if (strcmp(line, "sweep") == 0 && parse_flag(arg, &flag)) {
-		st.sweep = flag;
-		con_printf("ok sweep %d\n", st.sweep);
 	} else if (strcmp(line, "hide") == 0 && parse_flag(arg, &flag)) {
 		st.hide_spurs = flag;
 		con_printf("ok hide %d\n", st.hide_spurs);
