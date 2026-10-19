@@ -59,9 +59,14 @@ static void gain_apply(void)
  * A forced gain is occasionally lost (measured, cause unknown: after some
  * thousand transmissions; the AGC then takes over and, with nothing on air,
  * raises the noise floor by up to 30 dB, until the next turnaround forces it
- * again). Re-forced at a capture when the last time is more than 20 ms ago.
+ * again). Re-forced at a capture when the last time is more than
+ * CONFIG_ESP_SDR_RX_GAIN_REFRESH_MS ago (20 by default).
  */
+#if defined(CONFIG_ESP_SDR_RX_GAIN_REFRESH_MS)
+#define GAIN_REFRESH_MS CONFIG_ESP_SDR_RX_GAIN_REFRESH_MS
+#else
 #define GAIN_REFRESH_MS 20
+#endif
 
 bool esp_sdr_rx_gain_refresh_after(uint32_t ms)
 {

@@ -27,6 +27,17 @@ config ESP_SDR_RFTEST
 	  esp-sdr-zephyr". Without it the receiver runs on the hardware AGC
 	  only and transmit keeps the PHY's own power setting.
 
+config ESP_SDR_RX_GAIN_REFRESH_MS
+	int "Re-force a fixed receive gain at a capture after this many ms"
+	default 20
+	depends on ESP_SDR_RFTEST
+	help
+	  A forced receive gain is occasionally lost (doc/hardware-quirks.md);
+	  a capture re-forces it when the last force is older than this, at
+	  14 to 51 us each time. 0 re-forces before every capture, for apps
+	  that capture back to back and must not see a burst at the AGC's gain
+	  (apps/waterfall: its rows are the maximum over several bursts).
+
 config ESP_SDR_RX_DECIM
 	bool "Decimated capture"
 	default y

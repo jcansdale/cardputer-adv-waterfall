@@ -25,7 +25,9 @@ and comparing the AGC force register (`0x6001c02c`) does not detect it:
 
 **How it is handled.** The library re-forces the gain at a capture when the
 last force is more than 20 ms old (`esp_sdr_rx_gain_refresh()` in
-`lib/esp_sdr/src/esp_sdr_rx.c`, `GAIN_REFRESH_MS`). Each re-force costs 14 to
+`lib/esp_sdr/src/esp_sdr_rx.c`; `CONFIG_ESP_SDR_RX_GAIN_REFRESH_MS`, 0 for before every
+capture as `apps/waterfall` does, where a lost force showed as a whole row 14 to 20 dB up
+about once in 80 rows while it drew the screen). Each re-force costs 14 to
 51 us. `esp_sdr_get_stats()` counts them, and `link status` prints them on
 its engine line. A turnaround back to receive also forces the gain. A ring
 run re-forces between units: every 20 ms when it sends bursts, every second
