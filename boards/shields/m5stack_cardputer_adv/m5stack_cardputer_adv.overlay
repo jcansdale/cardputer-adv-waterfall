@@ -3,7 +3,7 @@
  *
  * M5Stack Cardputer-Adv on its Stamp-S3A (m5stack_stamps3/esp32s3/procpu): the 1.14" ST7789V2
  * (240x135, landscape) on SPI2 and the internal I2C bus (SDA G8, SCL G9) with the TCA8418
- * keyboard controller at 0x34 (INT G11), the ES8311 codec and the BMI270 IMU. The display
+ * keyboard controller at 0x34 (INT G11), the ES8311 codec and the BMI270 IMU (0x69). The display
  * settings follow Zephyr's m5stack_cardputer shield (same panel and pins); the original
  * Cardputer's 74HC138 keyboard matrix is replaced by the TCA8418, which the app reads over
  * I2C (alias kbd-i2c). No PSRAM on this module.
@@ -90,6 +90,12 @@
 &i2c0 {
 	status = "okay";
 	clock-frequency = <I2C_BITRATE_FAST>;
+
+	/* The IMU, for the screen orientation. */
+	bmi270: bmi270@69 {
+		compatible = "bosch,bmi270";
+		reg = <0x69>;
+	};
 };
 
 /*

@@ -24,6 +24,16 @@ hold, so rows are captured until a frame is due, at most 15 a second, and the sc
 scrolls by all of them at once; a key press redraws at once. Without peak hold that is about
 50 rows a second at 16 MHz, against 26 drawing every row.
 
+Held upright (either edge down, past about 60 degrees; back to landscape within about 30 degrees
+of upright, so it does not flip back and forth), the BMI270 accelerometer switches to a portrait
+layout laid out as the landscape one: the settings on two lines, the scale, and the trace with
+the Wi-Fi and Bluetooth LE labels on top, the waterfall under them with the newest row at the
+top. The panel scrolls the waterfall in hardware, so a new row costs one 135-pixel column
+instead of a redraw: about 15 rows a second with peak hold and 70 without, against 12 and 52 in
+landscape. The arrow keys follow the
+rotation (left and right still scroll, up and down still step the span as seen on the screen);
+``v`` turns the automatic rotation off and on. The key list stays in landscape.
+
 Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by default
 each row is the per-bin maximum over 8 bursts (peak hold, ``P`` in the header); ``p`` turns
 it off for a plain average.
@@ -79,6 +89,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
 ``m``   fixed gain +1
 ``g``   AGC
+``v``   automatic portrait layout when held upright on / off
 ======  ===========================================
 
 Wi-Fi channels 1 to 14 are always labelled at the top of the spectrum trace, each number
@@ -108,7 +119,8 @@ answers with one ``ok <command> ...`` or ``err <command> ...`` line (``stat ...`
 Command               Action
 ====================  ===========================================================
 ``$help``             list the commands
-``$status``           the state: LO, view, span, rate, zoom, gain, peak hold, ...,
+``$status``           the state: LO, view, span, rate, zoom, gain, peak hold, the
+                      orientation and accelerometer (0.1 m/s^2), ...,
                       and the main loop's longest pass since the last ``$status``
 ``$bins [n|on|off]``  send the next n rows' (default 1) full 1024-bin spectra
 ``$iq [n|off]``       send the next n bursts' raw I/Q (4096 samples each)
@@ -120,6 +132,8 @@ Command               Action
 ``$gain <n|auto>``    fixed gain table index or AGC
 ``$peak on|off``      peak hold
 ``$hide on|off``      patch over the clock harmonics (display only)
+``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
+                      ``right`` (that edge down, portrait)
 ====================  ===========================================================
 
 Spectra and I/Q come back as binary frames between the text lines: ``ESDR``, a 28-byte

@@ -17,6 +17,7 @@
  *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  *   x     hide the board's own clock harmonics on/off
+ *   v     auto-rotate on/off: held upright, the portrait layout, scrolled by the panel
  *
  * The USB console takes the same keys, and lines starting with $ as commands for a host
  * (tools/wf_serial.py): full 1024-bin spectra and raw I/Q bursts come back as binary frames
@@ -36,6 +37,8 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/display.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/mipi_dbi.h>
+#include <zephyr/drivers/sensor.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
@@ -73,6 +76,12 @@ SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
 #define WF_Y       (PSD_Y + PSD_H)
 #define WF_H       (H - WF_Y)
 #define CHUNK_ROWS HDR_H /* the header is drawn in one chunk */
+
+/* History rows: the portrait layout's waterfall (more than the landscape one's WF_H). */
+#define HIST_ROWS 175
+/* The ST7789's frame memory has 320 lines, scrolled in hardware; the 240 shown start at 40. */
+#define PANEL_LINES 320
+#define PANEL_X0    40
 
 #define NFFT      1024U
 #define SAMPLES   4096U
@@ -123,7 +132,7 @@ static float row_db[W], trace_db[W];
 /* The per-pixel maximum since the last console dump. */
 static float dump_db[W];
 static bool dump_fresh = true;
-static uint8_t hist[WF_H][W];
+static uint8_t hist[HIST_ROWS][W];
 static unsigned int head;
 static uint16_t palette[256];
 static uint16_t fb[W * CHUNK_ROWS];
@@ -149,6 +158,9 @@ static struct {
 	bool screen;   /* drawing; off leaves more time for the host's captures */
 	int bins_left; /* rows whose full spectrum goes to the console, -1 for all */
 	int iq_left;   /* bursts whose raw I/Q goes to the console */
+	int orient;       /* enum orient: held upright, the portrait layout */
+	bool auto_rotate; /* the orientation follows the accelerometer */
+	bool side_dirty;  /* the portrait layout needs drawing in full */
 } st = {
 	.lo_mhz = FREQ_DEFAULT_MHZ,
 	.view_khz = FREQ_DEFAULT_MHZ * 1000,
@@ -168,6 +180,7 @@ static struct {
 	 */
 	.text = false,
 	.screen = true,
+	.auto_rotate = true,
 };
 
 /*
@@ -255,10 +268,10 @@ static void build_palette(void)
 	}
 }
 
-static void draw_text(uint16_t *buf, unsigned int x, unsigned int y, const char *s,
-		      uint16_t color)
+static void draw_text_w(uint16_t *buf, unsigned int stride, unsigned int x, unsigned int y,
+			const char *s, uint16_t color)
 {
-	for (; *s != '\0' && x + 5 <= W; s++, x += 6) {
+	for (; *s != '\0' && x + 5 <= stride; s++, x += 6) {
 		int ch = toupper((unsigned char)*s);
 
 		if (ch < 0x20 || ch > 0x5d) {
@@ -269,11 +282,17 @@ static void draw_text(uint16_t *buf, unsigned int x, unsigned int y, const char 
 
 			for (unsigned int row = 0; row < 7; row++) {
 				if (bits & BIT(row)) {
-					buf[(y + row) * W + x + col] = color;
+					buf[(y + row) * stride + x + col] = color;
 				}
 			}
 		}
 	}
+}
+
+static void draw_text(uint16_t *buf, unsigned int x, unsigned int y, const char *s,
+		      uint16_t color)
+{
+	draw_text_w(buf, W, x, y, s, color);
 }
 
 static int fs_khz(void)
@@ -288,7 +307,7 @@ static int span_khz(void)
 
 static uint8_t *hist_row(unsigned int age)
 {
-	return hist[(head + age) % WF_H];
+	return hist[(head + age) % HIST_ROWS];
 }
 
 /*
@@ -304,14 +323,14 @@ static void hist_remap(int old_view_khz, int old_span_khz, int old_zoom)
 	int d = (st.view_khz - new_span / 2) - (old_view_khz - old_span_khz / 2);
 
 	if (st.zoom > old_zoom) {
-		for (int r = WF_H - 1; r > 0; r--) {
+		for (int r = HIST_ROWS - 1; r > 0; r--) {
 			memcpy(hist_row(r), hist_row(r * old_zoom / st.zoom), W);
 		}
 	} else if (st.zoom < old_zoom) {
-		for (unsigned int r = 1; r < WF_H; r++) {
+		for (unsigned int r = 1; r < HIST_ROWS; r++) {
 			unsigned int src = r * old_zoom / st.zoom;
 
-			if (src < WF_H) {
+			if (src < HIST_ROWS) {
 				memcpy(hist_row(r), hist_row(src), W);
 			} else {
 				memset(hist_row(r), 0, W);
@@ -319,7 +338,7 @@ static void hist_remap(int old_view_khz, int old_span_khz, int old_zoom)
 		}
 	}
 
-	for (unsigned int r = 0; r < WF_H; r++) {
+	for (unsigned int r = 0; r < HIST_ROWS; r++) {
 		for (unsigned int c = 0; c < W; c++) {
 			float x = ((float)d + ((float)c + 0.5f) * (float)new_span / (float)W) *
 				  (float)W / (float)old_span_khz;
@@ -614,6 +633,7 @@ static void draw_help(void)
 		"[  ]   COLOUR RANGE",
 		"P      PEAK HOLD      W  CH. LINES",
 		"X      HIDE OWN CLOCK HARMONICS",
+		"V      AUTO-ROTATE (HOLD UPRIGHT)",
 		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
 		"YELLOW 1-14: WI-FI CHANNELS",
 		"CYAN B37-39: BLUETOOTH LE ADVERTISING",
@@ -641,7 +661,7 @@ static void draw_waterfall(void)
 		unsigned int rows = MIN(CHUNK_ROWS, WF_H - y0);
 
 		for (unsigned int r = 0; r < rows; r++) {
-			const uint8_t *src = hist[(head + y0 + r) % WF_H];
+			const uint8_t *src = hist_row(y0 + r);
 
 			for (unsigned int x = 0; x < W; x++) {
 				uint16_t c = palette[src[x]];
@@ -665,6 +685,449 @@ static void draw_waterfall(void)
 		}
 		blit(WF_Y + y0, rows);
 	}
+}
+
+/* ---- portrait layout: hardware scrolling ---- */
+
+/*
+ * Held upright the screen is 135 wide and 240 tall, laid out as in landscape: the settings
+ * (two lines), the scale and the trace on top, the waterfall under them with the newest row at
+ * the top. On the panel a row is one column, so the waterfall scrolls in hardware: a new row
+ * costs one column and a scroll command instead of a redraw. Portrait coordinates are u (0 to
+ * PH - 1, left to right, low to high frequency) and v (0 to PV - 1, top to bottom).
+ */
+#define PH        H  /* portrait width */
+#define PV        W  /* portrait height */
+#define P_HDR_H   20 /* two lines of settings */
+#define P_SCALE_Y P_HDR_H
+#define P_TRACE_Y (P_SCALE_Y + SCALE_H)
+#define P_TRACE_H 36
+#define TOP       (P_TRACE_Y + P_TRACE_H)
+#define STRIP     P_TRACE_H /* the tallest piece of the top drawn at once */
+#define SIDE_COLS (PV - TOP)
+BUILD_ASSERT(SIDE_COLS <= HIST_ROWS);
+
+enum orient {
+	ORIENT_LANDSCAPE,
+	ORIENT_LEFT_DOWN,  /* the Cardputer's left edge at the bottom */
+	ORIENT_RIGHT_DOWN, /* its right edge at the bottom */
+};
+
+static const struct device *const dbi = DEVICE_DT_GET(DT_PARENT(DT_CHOSEN(zephyr_display)));
+static const struct mipi_dbi_config dbi_cfg =
+	MIPI_DBI_CONFIG_DT(DT_CHOSEN(zephyr_display), SPI_WORD_SET(8) | SPI_OP_MODE_CONTROLLER, 0);
+
+#define ST7789_VSCRDEF 0x33
+#define ST7789_VSCSAD  0x37
+
+static bool scroll_on;
+static unsigned int scroll_off; /* the scroll area's first line, relative to its start */
+static unsigned int side_rows;  /* rows pushed, for the dotted channel lines */
+static uint16_t pbuf[PH * STRIP];  /* a strip in portrait coordinates */
+static uint16_t strip[STRIP * PH]; /* the same on the panel */
+static uint16_t col_px[PH];
+
+/* Left edge down is a quarter turn anticlockwise: the panel's right edge is on top. */
+static bool right_on_top(void)
+{
+	return st.orient == ORIENT_LEFT_DOWN;
+}
+
+/* The panel column of portrait row v. */
+static unsigned int panel_x(unsigned int v)
+{
+	return right_on_top() ? W - 1U - v : v;
+}
+
+/* The panel row of portrait column u. */
+static unsigned int panel_y(unsigned int u)
+{
+	return right_on_top() ? u : H - 1U - u;
+}
+
+static void panel_cmd(uint8_t cmd, uint16_t a, uint16_t b, uint16_t c, size_t words)
+{
+	uint8_t d[6] = {a >> 8, a & 0xff, b >> 8, b & 0xff, c >> 8, c & 0xff};
+
+	mipi_dbi_command_write(dbi, &dbi_cfg, cmd, d, 2U * words);
+}
+
+/* Back to the landscape layout: the whole frame memory as one unscrolled area. */
+static void scroll_stop(void)
+{
+	if (scroll_on) {
+		panel_cmd(ST7789_VSCRDEF, 0, PANEL_LINES, 0, 3);
+		panel_cmd(ST7789_VSCSAD, 0, 0, 0, 1);
+		scroll_on = false;
+	}
+}
+
+/* The scroll area's first frame memory line: the waterfall's columns on the panel. */
+static unsigned int scroll_tfa(void)
+{
+	return PANEL_X0 + (right_on_top() ? 0U : TOP);
+}
+
+static void scroll_start(void)
+{
+	unsigned int tfa = scroll_tfa();
+
+	panel_cmd(ST7789_VSCRDEF, tfa, SIDE_COLS, PANEL_LINES - tfa - SIDE_COLS, 3);
+	scroll_off = 0;
+	panel_cmd(ST7789_VSCSAD, tfa, 0, 0, 1);
+	scroll_on = true;
+}
+
+static void blit_rect(unsigned int x, unsigned int y, unsigned int w, unsigned int h,
+		      const uint16_t *buf)
+{
+	struct display_buffer_descriptor desc = {
+		.buf_size = w * h * sizeof(uint16_t),
+		.width = w,
+		.height = h,
+		.pitch = w,
+	};
+
+	display_write(display, x, y, &desc, buf);
+}
+
+/* pbuf, rows v0 to v0 + n - 1 of the portrait screen, onto the panel. */
+static void blit_strip(unsigned int v0, unsigned int n)
+{
+	for (unsigned int v = 0; v < n; v++) {
+		for (unsigned int u = 0; u < PH; u++) {
+			unsigned int x = right_on_top() ? n - 1U - v : v;
+
+			strip[panel_y(u) * n + x] = pbuf[v * PH + u];
+		}
+	}
+	blit_rect(MIN(panel_x(v0), panel_x(v0 + n - 1U)), 0, n, H, strip);
+}
+
+/* The landscape pixels c0 to c1 - 1 under portrait column u. */
+static void side_span(unsigned int u, unsigned int *c0, unsigned int *c1)
+{
+	*c0 = u * W / PH;
+	*c1 = MAX((u + 1U) * W / PH, *c0 + 1U);
+}
+
+static int side_u(int khz)
+{
+	int span = span_khz();
+
+	return (int)(((int64_t)khz - (st.view_khz - span / 2)) * PH / span);
+}
+
+static bool side_dim(unsigned int c0)
+{
+	return (int)c0 < pass_a || (int)c0 >= pass_b;
+}
+
+/* One history row onto the panel column for portrait row v. */
+static void side_row(const uint8_t *src, unsigned int n, unsigned int x)
+{
+	for (unsigned int u = 0; u < PH; u++) {
+		unsigned int c0, c1, lv = 0;
+		bool chan = false;
+
+		side_span(u, &c0, &c1);
+		for (unsigned int c = c0; c < c1; c++) {
+			lv = MAX(lv, src[c]);
+			chan |= ch_at[c] != 0;
+		}
+		uint16_t px = side_dim(c0) ? DIM(palette[lv]) : palette[lv];
+
+		if (st.channels && chan && n % 4U == 0U) {
+			px = RGB565(200, 200, 200);
+		}
+		col_px[panel_y(u)] = px;
+	}
+	blit_rect(x, 0, 1, H, col_px);
+}
+
+/* On top: the Wi-Fi channel numbers and the trace, growing up from the waterfall. */
+static void side_trace(void)
+{
+	static uint8_t wifi[PH], ble[PH]; /* the channel centred there, 0: none */
+	static bool ble_d[PH];
+	int next = 0;
+
+	memset(wifi, 0, sizeof(wifi));
+	memset(ble, 0, sizeof(ble));
+	memset(ble_d, 0, sizeof(ble_d));
+	for (int ch = 1; ch <= 14; ch++) {
+		int u = side_u(chan_khz(ch));
+
+		if (u >= 0 && u < (int)PH) {
+			wifi[u] = (uint8_t)ch;
+		}
+	}
+	for (size_t i = 0; i < ARRAY_SIZE(ble_adv); i++) {
+		int u = side_u(ble_adv[i].khz);
+
+		if (u >= 0 && u < (int)PH) {
+			ble[u] = ble_adv[i].ch;
+		}
+	}
+	for (int khz = 2404000; khz <= 2478000; khz += 2000) {
+		int u = side_u(khz);
+
+		if (khz != 2426000 && u >= 0 && u < (int)PH) {
+			ble_d[u] = true;
+		}
+	}
+
+	for (unsigned int u = 0; u < PH; u++) {
+		unsigned int c0, c1, lv = 0;
+		bool band = false;
+
+		side_span(u, &c0, &c1);
+		for (unsigned int c = c0; c < c1; c++) {
+			lv = MAX(lv, level(trace_db[c]));
+			band |= ch_band[c];
+		}
+		unsigned int h = lv * (P_TRACE_H - LABEL_H) / 256U;
+
+		for (unsigned int v = 0; v < P_TRACE_H; v++) {
+			unsigned int from_bottom = P_TRACE_H - 1U - v;
+			uint16_t c = band ? RGB565(0, 24, 48) : RGB565(0, 0, 0);
+
+			/* As in landscape: ticks under the labels, dotted lines with the overlay. */
+			if (wifi[u] != 0 && ((v >= LABEL_H - 2U && v < LABEL_H) ||
+					     (st.channels && v >= 2U * LABEL_H && (v & 1U) == 0))) {
+				c = RGB565(110, 110, 110);
+			}
+			if (ble_d[u] && v == 2U * LABEL_H - 1U) {
+				c = RGB565(0, 110, 128);
+			}
+			if (ble[u] != 0 && ((v >= 2U * LABEL_H - 2U && v < 2U * LABEL_H) ||
+					    (st.channels && v >= 2U * LABEL_H && (v & 1U) == 1))) {
+				c = BLE_COLOR;
+			}
+			if (from_bottom < h) {
+				c = from_bottom + 1U == h ? RGB565(255, 255, 255) : palette[lv / 2U];
+			}
+			pbuf[v * PH + u] = side_dim(c0) ? DIM(c) : c;
+		}
+	}
+	for (unsigned int u = 0; u < PH; u++) {
+		char num[4];
+		int len, lu;
+
+		if (wifi[u] == 0) {
+			continue;
+		}
+		len = snprintf(num, sizeof(num), "%u", wifi[u]);
+		lu = (int)u - (6 * len - 1) / 2;
+		if (lu >= next && lu >= 0 && lu + 6 * len <= (int)PH) {
+			draw_text_w(pbuf, PH, (unsigned int)lu, 1, num, RGB565(255, 220, 0));
+			next = lu + 6 * len + 1;
+		}
+	}
+	for (unsigned int u = 0; u < PH; u++) {
+		char name[8];
+
+		if (ble[u] != 0) {
+			snprintf(name, sizeof(name), "B%u", ble[u]);
+			draw_text_w(pbuf, PH, (unsigned int)CLAMP((int)u - 8, 0, (int)PH - 17),
+				    LABEL_H + 1U, name, BLE_COLOR);
+		}
+	}
+	blit_strip(P_TRACE_Y, P_TRACE_H);
+}
+
+/* The settings, two lines: the view and span, then the flags, gain and colour scale. */
+static void side_header(void)
+{
+	char text[32], gain[8];
+
+	for (unsigned int k = 0; k < PH * P_HDR_H; k++) {
+		pbuf[k] = RGB565(16, 16, 40);
+	}
+	if (st.gain == ESP_SDR_RX_GAIN_AUTO) {
+		snprintf(gain, sizeof(gain), "AGC");
+	} else {
+		snprintf(gain, sizeof(gain), "G:%d", st.gain);
+	}
+	snprintf(text, sizeof(text), "%d.%03d%s %dM %c%c", st.view_khz / 1000, st.view_khz % 1000,
+		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak_hold ? 'P' : ' ',
+		 st.hide_spurs ? 'X' : ' ');
+	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
+	snprintf(text, sizeof(text), "%s %c%d/%d", gain, st.auto_floor ? 'A' : 'L',
+		 (int)st.floor_db, (int)st.range_db);
+	draw_text_w(pbuf, PH, 2, 11, text, RGB565(255, 255, 255));
+	blit_strip(0, P_HDR_H);
+}
+
+/* The scale, as in landscape: MHz on top, ticks under them (taller on whole MHz), markers. */
+static void side_scale(void)
+{
+	static const int ticks[] = {100, 200, 500, 1000, 2000, 5000, 10000, 20000};
+	static const int labels[] = {1000, 2000, 5000, 10000, 20000, 50000};
+	int span = span_khz(), left = st.view_khz - span / 2;
+	int tick = ticks[ARRAY_SIZE(ticks) - 1], label = labels[ARRAY_SIZE(labels) - 1];
+	char text[12];
+	int next = 0;
+
+	for (size_t i = 0; i < ARRAY_SIZE(ticks); i++) {
+		if (ticks[i] * (int)PH >= 4 * span) {
+			tick = ticks[i];
+			break;
+		}
+	}
+	for (size_t i = 0; i < ARRAY_SIZE(labels); i++) {
+		if (labels[i] * (int)PH >= 30 * span) {
+			label = labels[i];
+			break;
+		}
+	}
+	for (unsigned int k = 0; k < PH * SCALE_H; k++) {
+		pbuf[k] = RGB565(0, 0, 0);
+	}
+	for (int f = (left + tick - 1) / tick * tick; f < left + span; f += tick) {
+		int u = side_u(f);
+
+		for (unsigned int v = f % 1000 == 0 ? SCALE_H - 2U : SCALE_H - 1U;
+		     v < SCALE_H && u >= 0 && u < (int)PH; v++) {
+			pbuf[v * PH + (unsigned int)u] = RGB565(160, 160, 160);
+		}
+		if (f % label == 0) {
+			int len = snprintf(text, sizeof(text), "%d", f / 1000);
+			int lu = u - (6 * len - 1) / 2;
+
+			if (lu >= next && lu >= 0 && lu + 6 * len <= (int)PH) {
+				draw_text_w(pbuf, PH, (unsigned int)lu, 0, text, RGB565(200, 200, 200));
+				next = lu + 6 * len + 2;
+			}
+		}
+	}
+	FOR_EACH_SPUR(left, left + span - 1, khz) {
+		int u = side_u(khz);
+
+		for (unsigned int v = SCALE_H - 3U; v < SCALE_H && u >= 0 && u < (int)PH; v++) {
+			pbuf[v * PH + (unsigned int)u] = RGB565(220, 0, 220);
+		}
+	}
+	int lo_u = side_u(st.lo_mhz * 1000);
+
+	for (unsigned int v = SCALE_H - 3U; v < SCALE_H && lo_u >= 0 && lo_u < (int)PH; v++) {
+		pbuf[v * PH + (unsigned int)lo_u] = RGB565(255, 0, 0);
+	}
+	pbuf[(SCALE_H - 1U) * PH + PH / 2U] = RGB565(255, 255, 255);
+	blit_strip(P_SCALE_Y, SCALE_H);
+}
+
+/* Everything, the history unscrolled: newest under the trace. */
+static void side_full(void)
+{
+	build_overlay();
+	scroll_start();
+	side_header();
+	side_scale();
+	side_trace();
+	for (unsigned int age = 0; age < SIDE_COLS; age++) {
+		side_row(hist_row(age), side_rows - age, panel_x(TOP + age));
+	}
+	st.side_dirty = false;
+}
+
+/* The newest row: scroll the waterfall down by one and write the row at its top. */
+static void side_push(void)
+{
+	unsigned int tfa = scroll_tfa();
+	unsigned int top = PANEL_X0 + panel_x(TOP); /* its frame memory line, unscrolled */
+
+	scroll_off = (scroll_off + (right_on_top() ? 1U : SIDE_COLS - 1U)) % SIDE_COLS;
+	panel_cmd(ST7789_VSCSAD, tfa + scroll_off, 0, 0, 1);
+	side_row(hist_row(0), ++side_rows, tfa + (top - tfa + scroll_off) % SIDE_COLS - PANEL_X0);
+}
+
+/* ---- orientation: BMI270 accelerometer ---- */
+
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(bmi270))
+static const struct device *const imu = DEVICE_DT_GET(DT_NODELABEL(bmi270));
+#else
+static const struct device *const imu;
+#endif
+static bool imu_ok;
+static float acc[3]; /* m/s^2 */
+
+static void imu_init(void)
+{
+	struct sensor_value odr = {.val1 = 25}, range = {.val1 = 2}; /* 25 Hz, +-2 g */
+
+	if (imu == NULL || !device_is_ready(imu)) {
+		LOG_WRN("IMU not ready");
+		return;
+	}
+	if (sensor_attr_set(imu, SENSOR_CHAN_ACCEL_XYZ, SENSOR_ATTR_SAMPLING_FREQUENCY, &odr) != 0 ||
+	    sensor_attr_set(imu, SENSOR_CHAN_ACCEL_XYZ, SENSOR_ATTR_FULL_SCALE, &range) != 0) {
+		LOG_WRN("IMU setup failed");
+		return;
+	}
+	imu_ok = true;
+	LOG_INF("IMU ready");
+}
+
+static void imu_poll(void)
+{
+	struct sensor_value v[3];
+
+	if (!imu_ok || sensor_sample_fetch(imu) != 0 ||
+	    sensor_channel_get(imu, SENSOR_CHAN_ACCEL_XYZ, v) != 0) {
+		return;
+	}
+	for (int i = 0; i < 3; i++) {
+		acc[i] = (float)sensor_value_to_double(&v[i]);
+	}
+}
+
+/*
+ * Gravity along +x: the left edge is down; -x the right edge; +y upright in landscape. With
+ * hysteresis, as a phone does: portrait past 60 degrees of tilt, landscape again only within
+ * 30 degrees of upright (or upside down); lying flat or in between keeps the layout. A change
+ * must hold for three readings.
+ */
+static void orient_update(void)
+{
+	static int candidate, count;
+	float ax = acc[0], ay = acc[1];
+	float tilt = atan2f(fabsf(ax), ay) * (180.0f / 3.14159265f); /* 0 upright, 180 upside down */
+	int o = st.orient;
+
+	if (!imu_ok || !st.auto_rotate || sqrtf(ax * ax + ay * ay) < 5.0f) {
+		count = 0;
+		return;
+	}
+	if (tilt > 60.0f && tilt < 150.0f) {
+		o = ax > 0.0f ? ORIENT_LEFT_DOWN : ORIENT_RIGHT_DOWN;
+	} else if (tilt < 30.0f || tilt > 160.0f) {
+		o = ORIENT_LANDSCAPE;
+	}
+	if (o == st.orient) {
+		count = 0;
+		return;
+	}
+	count = o == candidate ? count + 1 : 1;
+	candidate = o;
+	if (count >= 3) {
+		st.orient = o;
+		st.side_dirty = true;
+		count = 0;
+	}
+}
+
+/*
+ * The arrow keys (Fn with ; . , /) as seen on the rotated screen: up and down step the span,
+ * left and right scroll.
+ */
+static char rotate_key(char k)
+{
+	static const char keys[] = ";/.,"; /* up, right, down, left: clockwise */
+	const char *p = strchr(keys, k);
+	int turn = st.orient == ORIENT_LEFT_DOWN ? 3 : st.orient == ORIENT_RIGHT_DOWN ? 1 : 0;
+
+	return (p == NULL || k == '\0') ? k : keys[(p - keys + turn) % 4];
 }
 
 /* ---- keyboard: TCA8418 on the internal I2C bus ---- */
@@ -847,6 +1310,9 @@ static void handle_key(char k)
 		break;
 	case 'w':
 		st.channels = !st.channels;
+		return;
+	case 'v':
+		st.auto_rotate = !st.auto_rotate;
 		return;
 	case 'g':
 		st.gain = ESP_SDR_RX_GAIN_AUTO;
@@ -1177,7 +1643,7 @@ static int capture_row(void)
 		st.floor_db += 0.05f * (sum / (float)valid - 5.0f - st.floor_db);
 	}
 
-	head = (head + WF_H - 1U) % WF_H;
+	head = (head + HIST_ROWS - 1U) % HIST_ROWS;
 	for (unsigned int c = 0; c < W; c++) {
 		hist[head][c] = (uint8_t)level(row_db[c]);
 		trace_db[c] = st.trace_reset ? row_db[c]
@@ -1221,10 +1687,12 @@ static uint32_t loop_max_ms;
 static void print_status(void)
 {
 	con_printf("stat lo %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
-	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d loop_max %u\n",
+	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d orient %d rotate %d acc %d %d %d loop_max %u\n",
 	       st.lo_mhz, st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak_hold,
 	       st.hide_spurs, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
-	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, (unsigned int)loop_max_ms);
+	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.orient, st.auto_rotate,
+	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
+	       (unsigned int)loop_max_ms);
 	loop_max_ms = 0U;
 }
 
@@ -1288,7 +1756,7 @@ static void handle_cmd(char *line)
 		return;
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], iq [n|off], text on|off, "
-			   "screen on|off, "
+			   "screen on|off, rotate auto|land|left|right, "
 		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak on|off, hide on|off\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
@@ -1342,6 +1810,17 @@ static void handle_cmd(char *line)
 		st.screen = flag;
 		st.help_drawn = false;
 		con_printf("ok screen %d\n", st.screen);
+	} else if (strcmp(line, "rotate") == 0 &&
+		   (strcmp(arg, "auto") == 0 || strcmp(arg, "land") == 0 ||
+		    strcmp(arg, "left") == 0 || strcmp(arg, "right") == 0)) {
+		/* left and right: that edge of the Cardputer at the bottom. */
+		st.auto_rotate = strcmp(arg, "auto") == 0;
+		if (!st.auto_rotate) {
+			st.orient = arg[0] == 'l' && arg[1] == 'e'   ? ORIENT_LEFT_DOWN
+				    : arg[0] == 'r'                 ? ORIENT_RIGHT_DOWN
+								    : ORIENT_LANDSCAPE;
+		}
+		con_printf("ok rotate %s orient %d\n", arg, st.orient);
 	} else if (strcmp(line, "peak") == 0 && parse_flag(arg, &flag)) {
 		st.peak_hold = flag;
 		con_printf("ok peak %d\n", st.peak_hold);
@@ -1386,6 +1865,7 @@ int main(void)
 	display_blanking_off(display);
 
 	kbd_init();
+	imu_init();
 
 	ret = esp_sdr_init();
 	if (ret != 0) {
@@ -1407,7 +1887,7 @@ int main(void)
 		unsigned char ck;
 
 		while ((k = kbd_poll()) != 0) {
-			handle_key(k);
+			handle_key(rotate_key(k));
 			input = true;
 		}
 		while (uart_poll_in(console, &ck) == 0) {
@@ -1431,9 +1911,16 @@ int main(void)
 		}
 		/* Zoomed in, zoom captures per redraw: time resolution grows with frequency's. */
 		ret = 0;
+		if (input) {
+			st.side_dirty = true;
+		}
 		for (int n = 0; n < st.zoom && ret == 0; n++) {
 			ret = capture_row();
 			rows++;
+			if (ret == 0 && st.orient != ORIENT_LANDSCAPE && st.screen && !st.help && scroll_on &&
+			    !st.side_dirty) {
+				side_push();
+			}
 		}
 		if (ret != 0) {
 			LOG_WRN("capture: %d", ret);
@@ -1454,18 +1941,40 @@ int main(void)
 		} else if (!st.screen) {
 			/* Paused for the host (the history still fills): say so once. */
 			if (!st.help_drawn) {
+				scroll_stop();
 				draw_header();
 				st.help_drawn = true;
 			}
-		} else if (!st.help) {
+			st.side_dirty = true;
+		} else if (st.help) {
+			if (!st.help_drawn) {
+				scroll_stop();
+				draw_help();
+			}
+			st.side_dirty = true;
+		} else if (st.orient != ORIENT_LANDSCAPE) {
+			/* The columns went out as they came; the trace follows at the frame rate. */
+			if (st.side_dirty || !scroll_on) {
+				side_full();
+			} else {
+				side_header();
+				side_trace();
+			}
+		} else {
+			scroll_stop();
 			draw_header();
 			draw_scale();
 			draw_trace();
 			draw_waterfall();
-		} else if (!st.help_drawn) {
-			draw_help();
 		}
 
+		static uint32_t last_imu_ms;
+
+		if (now - last_imu_ms >= 200U) {
+			imu_poll();
+			orient_update();
+			last_imu_ms = now;
+		}
 		if (now - last_dump_ms >= 2000U && st.text) {
 			dump_spectrum();
 			last_dump_ms = now;
