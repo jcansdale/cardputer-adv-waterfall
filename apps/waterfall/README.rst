@@ -52,7 +52,10 @@ Portrait     10   18   30   50   75  100
 The top line shows the view's centre frequency, span, gain and colour scale; under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
 fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
-which has a narrow artefact of its own (LO leakage, patched over) to ignore. Magenta marks
+which has a narrow artefact of its own (LO leakage, patched over, with a skirt of about
++-110 kHz) to ignore. Zoomed in to 8, 4 or 2 MHz the radio tunes just below the view instead
+(offset tuning: 250 kHz below at 8 MHz, whose last 250 kHz on the right are then beyond the
+capture and stay dark; 1 MHz below at 4 and 2 MHz), so that line is off the screen. Magenta marks
 are the board's own clock harmonics: steady, narrow carriers exactly on multiples of the
 40 MHz crystal and the 48 MHz USB clock (2352, 2360, 2400, 2440, 2448 and 2496 MHz measured; 2448 on battery too);
 ``x`` patches them over with the neighbouring level (``X`` in the header), which would also hide

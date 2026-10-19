@@ -150,7 +150,8 @@ static uint16_t palette[256];
 static uint16_t fb[W * CHUNK_ROWS];
 
 static struct {
-	int lo_mhz;   /* the radio's LO */
+	int lo_mhz;     /* the radio's LO, MHz */
+	int lo_ofs_khz; /* and above that, 0 to 999 kHz (offset tuning, zoomed in) */
 	int view_khz; /* the centre of the screen */
 	int span_i;   /* the step in spans[] */
 	int zoom;     /* the screen spans the sample rate / zoom */
@@ -363,13 +364,35 @@ static void hist_remap(int old_view_khz, int old_span_khz, int old_zoom)
 }
 
 /* Retune when the view leaves the span the radio captures. */
+static int lo_khz(void)
+{
+	return st.lo_mhz * 1000 + st.lo_ofs_khz;
+}
+
+static void set_lo_khz(int khz)
+{
+	khz = CLAMP(khz, FREQ_MIN_MHZ * 1000, FREQ_MAX_MHZ * 1000);
+	if (khz != lo_khz()) {
+		st.lo_mhz = khz / 1000;
+		st.lo_ofs_khz = khz % 1000;
+		st.dirty_radio = true;
+	}
+}
+
+/*
+ * Retune when the view leaves the span the radio captures. Zoomed in (8, 4, 2 MHz of the
+ * 16 MS/s capture), offset tuning: the LO sits just below the view (250 kHz at 8 MHz, the
+ * capture then ends 250 kHz short of its right edge; 1 MHz at 4 and 2), so its line and the
+ * skirt around it (+3 dB out to about 110 kHz, the same at every LO) stay off the screen.
+ */
 static void follow_view(void)
 {
-	int half = fs_khz() / 2, span = span_khz(), lo = st.lo_mhz * 1000;
+	int half = fs_khz() / 2, span = span_khz(), lo = lo_khz();
 
-	if (st.view_khz - span / 2 < lo - half || st.view_khz + span / 2 > lo + half) {
-		st.lo_mhz = CLAMP((st.view_khz + 500) / 1000, FREQ_MIN_MHZ, FREQ_MAX_MHZ);
-		st.dirty_radio = true;
+	if (st.zoom > 1) {
+		set_lo_khz(st.view_khz - span / 2 - (st.zoom == 2 ? 250 : 1000));
+	} else if (st.view_khz - span / 2 < lo - half || st.view_khz + span / 2 > lo + half) {
+		set_lo_khz((st.view_khz + 500) / 1000 * 1000);
 	}
 }
 
@@ -465,7 +488,7 @@ static void draw_scale(void)
 	}
 	/* The view centre (white) and the tuning centre, the LO artefact (red). */
 	fb[(SCALE_H - 1) * W + W / 2] = RGB565(255, 255, 255);
-	int lo_x = (int)(((int64_t)st.lo_mhz * 1000 - left) * W / span);
+	int lo_x = (int)(((int64_t)lo_khz() - left) * W / span);
 
 	if (lo_x >= 0 && lo_x < (int)W) {
 		for (unsigned int y = SCALE_H - 3U; y < SCALE_H; y++) {
@@ -509,7 +532,7 @@ static void build_overlay(void)
 	pass_a = 0;
 	pass_b = W;
 	if (st.rate != ESP_SDR_RATE_16MSPS) {
-		int lo = st.lo_mhz * 1000;
+		int lo = lo_khz();
 
 		pass_a = CLAMP((int)(((int64_t)lo - PASS_KHZ - left) * W / span), 0, (int)W);
 		pass_b = CLAMP((int)(((int64_t)lo + PASS_KHZ - left) * W / span) + 1, 0, (int)W);
@@ -1019,7 +1042,7 @@ static void side_scale(void)
 			pbuf[v * PH + (unsigned int)u] = RGB565(220, 0, 220);
 		}
 	}
-	int lo_u = side_u(st.lo_mhz * 1000);
+	int lo_u = side_u(lo_khz());
 
 	for (unsigned int v = SCALE_H - 3U; v < SCALE_H && lo_u >= 0 && lo_u < (int)PH; v++) {
 		pbuf[v * PH + (unsigned int)lo_u] = RGB565(255, 0, 0);
@@ -1360,6 +1383,10 @@ static void apply_radio(void)
 		LOG_WRN("rx bandwidth: %d", ret);
 	}
 
+	ret = esp_sdr_set_freq_offset(st.lo_ofs_khz);
+	if (ret != 0 && ret != -ERANGE) {
+		LOG_WRN("freq offset %d: %d", st.lo_ofs_khz, ret);
+	}
 	ret = esp_sdr_set_freq(st.lo_mhz);
 
 	st.tune_warn = ret == -ERANGE;
@@ -1464,7 +1491,7 @@ static void frame_begin(uint8_t type, uint16_t count, uint32_t len, unsigned int
 		.count = sys_cpu_to_le16(count),
 		.seq = sys_cpu_to_le32(frame_seq++),
 		.ms = sys_cpu_to_le32(k_uptime_get_32()),
-		.lo_khz = (int32_t)sys_cpu_to_le32((uint32_t)(st.lo_mhz * 1000)),
+		.lo_khz = (int32_t)sys_cpu_to_le32((uint32_t)lo_khz()),
 		.fs_hz = sys_cpu_to_le32(esp_sdr_rx_rate_hz(st.rate)),
 		.gain = (int16_t)sys_cpu_to_le16((uint16_t)st.gain),
 		.bursts = (uint8_t)bursts,
@@ -1669,7 +1696,7 @@ static int capture_row(void)
 
 	/* Likewise the clock harmonics, over the Hann window's main lobe. */
 	if (st.hide_spurs) {
-		int lo = st.lo_mhz * 1000, half = fs_khz() / 2;
+		int lo = lo_khz(), half = fs_khz() / 2;
 
 		FOR_EACH_SPUR(lo - half, lo + half, khz) {
 			int kc = (int)lroundf((float)(khz - lo) * (float)NFFT / (float)fs_khz());
@@ -1689,7 +1716,7 @@ static int capture_row(void)
 	/* Pixel edges in shifted bins (NFFT/2 is the LO). */
 	float bin_khz = (float)fs_khz() / (float)NFFT;
 	float px_bins = (float)span_khz() / (float)W / bin_khz;
-	float left = (float)(st.view_khz - span_khz() / 2 - st.lo_mhz * 1000) / bin_khz +
+	float left = (float)(st.view_khz - span_khz() / 2 - lo_khz()) / bin_khz +
 		     (float)(NFFT / 2U);
 
 	for (unsigned int c = 0; c < W; c++) {
@@ -1758,9 +1785,9 @@ static uint32_t loop_max_ms;
 
 static void print_status(void)
 {
-	con_printf("stat lo %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
+	con_printf("stat lo %d lo_khz %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
 	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d orient %d rotate %d acc %d %d %d loop_max %u\n",
-	       st.lo_mhz, st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
+	       st.lo_mhz, lo_khz(), st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
 	       st.hide_spurs, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
 	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.orient, st.auto_rotate,
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
@@ -1848,9 +1875,10 @@ static void handle_cmd(char *line)
 		   v <= FREQ_MAX_MHZ) {
 		/* The LO alone; the view moves only if it would leave the capture. */
 		st.lo_mhz = (int)v;
+		st.lo_ofs_khz = 0;
 		st.dirty_radio = true;
-		if (st.view_khz - span_khz() / 2 < st.lo_mhz * 1000 - fs_khz() / 2 ||
-		    st.view_khz + span_khz() / 2 > st.lo_mhz * 1000 + fs_khz() / 2) {
+		if (st.view_khz - span_khz() / 2 < lo_khz() - fs_khz() / 2 ||
+		    st.view_khz + span_khz() / 2 > lo_khz() + fs_khz() / 2) {
 			st.view_khz = st.lo_mhz * 1000;
 			hist_remap(old_view, old_span, old_zoom);
 		}
