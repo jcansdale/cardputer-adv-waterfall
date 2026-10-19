@@ -1948,6 +1948,21 @@ static int capture_row(void)
 		send_bins(psd, norm, bursts, (unsigned int)segments);
 	}
 
+	/*
+	 * The automatic floor follows the pixels the analog filters pass: at 40 and 80 MS/s about
+	 * 18 MHz either side of the LO, the attenuated rest would pull it down and wash out the
+	 * middle.
+	 */
+	int in_a = 0, in_b = W;
+
+	if (st.rate != ESP_SDR_RATE_16MSPS) {
+		int64_t left_khz = st.view_khz - span_khz() / 2;
+
+		in_a = (int)CLAMP((lo_khz() - PASS_KHZ - left_khz) * W / span_khz(), 0, (int64_t)W - 1);
+		in_b = (int)CLAMP((lo_khz() + PASS_KHZ - left_khz) * W / span_khz() + 1, in_a + 1,
+				  (int64_t)W);
+	}
+
 	/* Pixel edges in shifted bins (NFFT/2 is the LO). */
 	float bin_khz = (float)fs_khz() / (float)NFFT;
 	float px_bins = (float)span_khz() / (float)W / bin_khz;
@@ -1968,8 +1983,10 @@ static int capture_row(void)
 		}
 		p *= norm;
 		row_db[c] = p > 0.0f ? 10.0f * log10f(p) : FLOOR_DB;
-		sum += row_db[c];
-		valid++;
+		if ((int)c >= in_a && (int)c < in_b) {
+			sum += row_db[c];
+			valid++;
+		}
 	}
 
 	if (st.auto_floor && valid > 0) {

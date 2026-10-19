@@ -76,7 +76,8 @@ LO's own line is bridged over 120 kHz either side, and its skirt, a smooth bump 
 kept (their 64 strongest bins), so going back to one applies its mask at once. A real steady
 carrier is masked too: ``x`` turns the mask off. At 40 and
 80 MS/s the trace and waterfall are dimmed beyond about 18 MHz either side of it, where the
-analog filters cut reception off. Below come a 30 pixel spectrum trace and the
+analog filters cut reception off; the automatic colour floor follows only the part in between,
+so the attenuated edges do not pull it down and wash out the middle. Below come a 30 pixel spectrum trace and the
 waterfall, newest row on top. A ``!`` after the frequency means the PLL reported the
 frequency outside its tuning window (``-ERANGE``).
 
