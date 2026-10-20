@@ -101,7 +101,9 @@ SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
  * (time resolution grows with frequency resolution below 16 MHz). 16 MHz is captured at
  * 40 MS/s: at 16 MS/s the analog filters pass about +-10 MHz, wider than the capture, and
  * whatever lies 8 to 10 MHz out folded back in at the other edge (Wi-Fi at 2402 MHz showed
- * 21 dB up at 2386, tuned to 2393). Its 39 kHz bins are still finer than the pixels.
+ * 21 dB up at 2386, tuned to 2393). Its 39 kHz bins are still finer than the pixels. Likewise
+ * 40 MHz at 80 MS/s: at 40 MS/s the filters' slow roll-off past +-18 MHz let a strong signal
+ * just beyond one edge fold in at the other (a 2675 MHz mast at 2635, tuned to 2655).
  */
 static const struct {
 	enum esp_sdr_rate rate;
@@ -109,7 +111,7 @@ static const struct {
 	int zoom;
 } spans[] = {
 	{ESP_SDR_RATE_80MSPS, 80, 1},
-	{ESP_SDR_RATE_40MSPS, 40, 1},
+	{ESP_SDR_RATE_80MSPS, 40, 1},
 	{ESP_SDR_RATE_40MSPS, 16, 1},
 	{ESP_SDR_RATE_16MSPS, 8, 2},
 	{ESP_SDR_RATE_16MSPS, 4, 4},
@@ -2073,13 +2075,6 @@ static int capture_row(void)
 				  (int64_t)W);
 	}
 
-	/*
-	 * At 40 and 80 MS/s the outermost 2 MHz either side are blank: the analog filters pass
-	 * about +-18 MHz and fall off slowly, so a strong signal just beyond one edge folds back
-	 * in at the other, 40 (or 80) MHz away (the 2675 MHz mast showed at 2635, tuned to 2655).
-	 */
-	int edge = st.rate == ESP_SDR_RATE_16MSPS ? 0 : (int)(2000 * (int)NFFT / fs_khz());
-
 	/* Pixel edges in shifted bins (NFFT/2 is the LO). */
 	float bin_khz = (float)fs_khz() / (float)NFFT;
 	float px_bins = (float)span_khz() / (float)W / bin_khz;
@@ -2091,7 +2086,7 @@ static int capture_row(void)
 		int mb = MAX((int)floorf(left + (float)(c + 1U) * px_bins), ma + 1);
 		float p = 0.0f;
 
-		if (ma < edge || mb > (int)NFFT - edge) {
+		if (ma < 0 || mb > (int)NFFT) {
 			row_db[c] = FLOOR_DB;
 			continue;
 		}
