@@ -32,15 +32,24 @@ Scrolling past the captured span retunes the radio, and the waterfall history is
 rescaled to stay lined up.
 
 The spans of 40 MHz and wider sweep: each row retunes across the view in steps of at most
-32 MHz (2 at 40 MHz, 3 at 80, 5 at 160, 32 for the whole 1000 MHz from 1800 to 2800), captures 1024 samples at
+32 MHz (2 at 40 MHz, 3 at 80, 5 at 160, 32 for the whole 1000 MHz from 1800 to 2800), captures 4096 samples at
 80 MS/s at each and keeps the middle of each step, inside the filters' passband, so the band
 plan shows at a glance (the band names fit). The library waits 3 ms after every retune by
 default; captures right after a 40 MHz hop matched settled ones with no wait at all
 (passband within 0.15 dB, clock harmonics 0.5 dB, also across the 5/6 divider at 2210 MHz), so
-the app sets 200 us (``esp_sdr_set_retune_settle()``) and a step takes about 1.6 ms. Rows a
-second at ``P8``: 114 at 40 MHz, 85 at 80, 60 at 160 MHz, 35 at 320, 20 at 640, 11 at 1000; peak hold takes P/8 bursts
-per step. Each step sees only 13 us of the air per row, so short bursts are often missed, and
-the steps show as a faint 1 to 2 dB ripple. The steady-line mask is off while sweeping; ``x``
+the app sets 200 us (``esp_sdr_set_retune_settle()``) and a retune takes about 1 ms. The P
+bursts of a row are shared out over the steps (at least one each), so a row is as much work
+as elsewhere and the scroll speed falls smoothly with the width (rows a second):
+
+==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
+Span (MHz)  1000  640  320  160   80   40   16    8    4    2
+==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
+``P8``         6    9   15   21   23   25   25   49   85  115
+``P1``         6    9   15   29   50   64   99  112  113  116
+==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
+
+At 320 MHz and wider a step gets one burst, so short bursts are often missed there, and the
+steps show as a faint 1 to 2 dB ripple. The steady-line mask is off while sweeping; ``x``
 patches the clock harmonics and each step's LO spurs instead, including those the receiver
 makes when tuned below about 1842 MHz (up to +14 dB, 2.5 to 3.3 MHz below the LO). ``$settle``
 changes the wait after each retune, for experiments.
@@ -66,7 +75,8 @@ Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by
 each row is the per-bin maximum over 8 bursts (peak hold, ``P8`` in the header). ``p`` sets
 the speed: each press halves the bursts per row, 8, 4, 2, 1 (one burst's plain average), then
 wraps round to the slow end, 32 and 16. Fewer bursts scroll faster but miss more of short
-bursts; 16 and 32 catch more and hold more seconds of history. Rows a second at 16 MHz:
+bursts; 16 and 32 catch more and hold more seconds of history. Rows a second at 16 MHz, in
+landscape (portrait is a little faster):
 
 ==========  ===  ===  ===  ===  ===  ===
 Bursts       32   16    8    4    2    1

@@ -2092,8 +2092,9 @@ static void commit_row(float sum, unsigned int valid);
  * pass only about +-18 MHz, the rest dim): the view in steps of at most 32 MHz, each
  * captured at 80 MS/s with the LO at its centre, of which only the middle (inside the
  * filters' +-18 MHz, clear of the edges) is used. A step is a retune (about 1 ms with the
- * short settle), SWEEP_SAMPLES samples and one FFT; peak hold takes the maximum of P/8 of
- * them per step (at least one). No steady-line mask (it learns per tuning) and no frames.
+ * short settle) and SWEEP_SAMPLES samples (4 FFTs averaged), the same capture as the other
+ * spans; peak hold shares the P bursts of a row out over the steps (at least one each), so
+ * a row takes about as long as at 16 MHz and the scroll speed falls smoothly with the width. No steady-line mask (it learns per tuning) and no frames.
  */
 /* Bins @p k - 2 to @p k + 2 about the LO (DC in bin 0) bridged from their neighbours. */
 static void patch_bins(int k)
@@ -2137,12 +2138,13 @@ static void sweep_patch(int lo)
 }
 
 #define SWEEP_STEP_KHZ 32000
-#define SWEEP_SAMPLES  NFFT
+#define SWEEP_SAMPLES  SAMPLES
 static int capture_sweep(void)
 {
 	int span = span_khz(), left = st.view_khz - span / 2;
 	int n = DIV_ROUND_UP(span, SWEEP_STEP_KHZ), step = span / n;
-	unsigned int bursts = MAX((unsigned int)st.peak / 8U, 1U);
+	/* P bursts a row as elsewhere, shared out over the steps (at least one each). */
+	unsigned int bursts = DIV_ROUND_UP((unsigned int)st.peak, (unsigned int)n);
 	float bin_khz = (float)fs_khz() / (float)NFFT, sum = 0.0f;
 	unsigned int valid = 0;
 
