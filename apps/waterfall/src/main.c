@@ -734,7 +734,8 @@ static void draw_trace(void)
 
 		for (unsigned int x = 0; x < W; x++) {
 			unsigned int lv = level(trace_db[x]);
-			unsigned int h = lv * PSD_H / 256U;
+			/* At least the white tip: at the floor the trace still shows, on the bottom. */
+			unsigned int h = MAX(lv * PSD_H / 256U, 1U);
 
 			for (unsigned int r = 0; r < rows; r++) {
 				unsigned int y = y0 + r; /* 0 at the top */
@@ -1072,7 +1073,7 @@ static void side_trace(void)
 			lv = MAX(lv, level(trace_db[c]));
 			band |= ch_band[c];
 		}
-		unsigned int h = lv * (P_TRACE_H - LABEL_H) / 256U;
+		unsigned int h = MAX(lv * (P_TRACE_H - LABEL_H) / 256U, 1U);
 
 		for (unsigned int v = 0; v < P_TRACE_H; v++) {
 			unsigned int from_bottom = P_TRACE_H - 1U - v;
