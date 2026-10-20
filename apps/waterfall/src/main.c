@@ -549,9 +549,9 @@ static void draw_scale(void)
 			fb[y * W + x] = RGB565(220, 0, 220);
 		}
 	}
-	/* The view centre (white) and the tuning centre, the LO artefact (red). */
+	/* The view centre (white) and the tuning centre, the LO artefact (red; none in a sweep). */
 	fb[(SCALE_H - 1) * W + W / 2] = RGB565(255, 255, 255);
-	int lo_x = (int)(((int64_t)lo_khz() - left) * W / span);
+	int lo_x = sweeping() ? -1 : (int)(((int64_t)lo_khz() - left) * W / span);
 
 	if (lo_x >= 0 && lo_x < (int)W) {
 		for (unsigned int y = SCALE_H - 3U; y < SCALE_H; y++) {
@@ -1195,7 +1195,7 @@ static void side_scale(void)
 			pbuf[v * PH + (unsigned int)u] = RGB565(220, 0, 220);
 		}
 	}
-	int lo_u = side_u(lo_khz());
+	int lo_u = sweeping() ? -1 : side_u(lo_khz());
 
 	for (unsigned int v = SCALE_H - 3U; v < SCALE_H && lo_u >= 0 && lo_u < (int)PH; v++) {
 		pbuf[v * PH + (unsigned int)lo_u] = RGB565(255, 0, 0);
