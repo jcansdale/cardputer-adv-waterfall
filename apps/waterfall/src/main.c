@@ -2072,6 +2072,34 @@ static void commit_row(float sum, unsigned int valid);
  * short settle), SWEEP_SAMPLES samples and one FFT; peak hold takes the maximum of P/8 of
  * them per step (at least one). No steady-line mask (it learns per tuning) and no frames.
  */
+/* Bins @p k - 2 to @p k + 2 about the LO (DC in bin 0) bridged from their neighbours. */
+static void patch_bins(int k)
+{
+	if (k < -(int)NFFT / 2 + 4 || k > (int)NFFT / 2 - 4) {
+		return;
+	}
+	float fill = 0.5f * (psd[(unsigned int)(k - 3 + (int)NFFT) % NFFT] +
+			     psd[(unsigned int)(k + 3 + (int)NFFT) % NFFT]);
+
+	for (int j = k - 2; j <= k + 2; j++) {
+		psd[(unsigned int)(j + (int)NFFT) % NFFT] = fill;
+	}
+}
+
+/*
+ * x while sweeping, in place of the mask (it learns per tuning, too slowly for a sweep): the
+ * board's clock harmonics and the spur riding on this step's LO patched over.
+ */
+static void sweep_patch(int lo)
+{
+	int half = fs_khz() / 2;
+
+	FOR_EACH_SPUR(lo - half, lo + half, khz) {
+		patch_bins((int)lroundf((float)(khz - lo) * (float)NFFT / (float)fs_khz()));
+	}
+	patch_bins((int)lroundf((float)(lo_spur_khz(lo) - lo) * (float)NFFT / (float)fs_khz()));
+}
+
 #define SWEEP_STEP_KHZ 32000
 #define SWEEP_SAMPLES  NFFT
 static int capture_sweep(void)
@@ -2109,6 +2137,9 @@ static int capture_sweep(void)
 		}
 		memcpy(psd, peak, sizeof(psd));
 		lo_bridge();
+		if (st.hide_spurs) {
+			sweep_patch(centre);
+		}
 
 		float norm = 1.0f / (FULLSCALE * FULLSCALE * window_gain * (float)segments);
 		int xa = (int)((int64_t)(a - left) * W / span);
