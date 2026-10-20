@@ -2063,6 +2063,13 @@ static int capture_row(void)
 				  (int64_t)W);
 	}
 
+	/*
+	 * At 40 and 80 MS/s the outermost 2 MHz either side are blank: the analog filters pass
+	 * about +-18 MHz and fall off slowly, so a strong signal just beyond one edge folds back
+	 * in at the other, 40 (or 80) MHz away (the 2675 MHz mast showed at 2635, tuned to 2655).
+	 */
+	int edge = st.rate == ESP_SDR_RATE_16MSPS ? 0 : (int)(2000 * (int)NFFT / fs_khz());
+
 	/* Pixel edges in shifted bins (NFFT/2 is the LO). */
 	float bin_khz = (float)fs_khz() / (float)NFFT;
 	float px_bins = (float)span_khz() / (float)W / bin_khz;
@@ -2074,7 +2081,7 @@ static int capture_row(void)
 		int mb = MAX((int)floorf(left + (float)(c + 1U) * px_bins), ma + 1);
 		float p = 0.0f;
 
-		if (ma < 0 || mb > (int)NFFT) {
+		if (ma < edge || mb > (int)NFFT - edge) {
 			row_db[c] = FLOOR_DB;
 			continue;
 		}
