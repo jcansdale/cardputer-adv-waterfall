@@ -177,6 +177,7 @@ static struct {
 	int orient;       /* enum orient: held upright, the portrait layout */
 	bool auto_rotate; /* the orientation follows the accelerometer */
 	bool side_dirty;  /* the portrait layout needs drawing in full */
+	bool region_us;   /* the band labels: Europe/UK (false) or the US */
 } st = {
 	.lo_mhz = FREQ_DEFAULT_MHZ,
 	.view_khz = FREQ_DEFAULT_MHZ * 1000,
@@ -548,6 +549,110 @@ static const struct {
 	int khz;
 } ble_adv[] = {{37, 2402000}, {38, 2426000}, {39, 2480000}};
 
+/*
+ * The services in the S3's tuning range (approximate; region allocations differ). Drawn as a
+ * strip with its name under the Bluetooth labels: orange where masts transmit, blue where
+ * phones do, violet where both take turns (TDD), pink DECT, grey satellites. ISM (Wi-Fi, BLE,
+ * Zigbee: labelled anyway) has no strip. The number keys 1 to 9 and 0 jump to them in order.
+ */
+#define MAST   RGB565(255, 140, 0)
+#define PHONE  RGB565(100, 160, 255)
+#define TDD    RGB565(200, 120, 255)
+#define DECTC  RGB565(255, 100, 180)
+#define SAT    RGB565(170, 170, 170)
+#define ZIGBEE RGB565(170, 255, 0)
+struct band {
+	int lo_khz, hi_khz;
+	const char *name;
+	uint16_t color; /* 0: no strip */
+};
+static const struct band bands_eu[] = {
+	{1805000, 1880000, "B3 DL", MAST},   {1880000, 1900000, "DECT", DECTC},
+	{1920000, 1980000, "B1 UL", PHONE},  {2110000, 2170000, "B1 DL", MAST},
+	{2300000, 2400000, "B40", TDD},      {2400000, 2483500, "ISM", 0},
+	{2483500, 2500000, "GSTAR", SAT},    {2500000, 2570000, "B7 UL", PHONE},
+	{2570000, 2620000, "B38", TDD},      {2620000, 2690000, "B7 DL", MAST},
+};
+static const struct band bands_us[] = {
+	{1850000, 1915000, "B25 UL", PHONE}, {1920000, 1930000, "DECT6", DECTC},
+	{1930000, 1995000, "B25 DL", MAST},  {2110000, 2200000, "B66 DL", MAST},
+	{2305000, 2315000, "B30 UL", PHONE}, {2320000, 2345000, "SXM", SAT},
+	{2350000, 2360000, "B30 DL", MAST},  {2400000, 2483500, "ISM", 0},
+	{2483500, 2500000, "GSTAR", SAT},    {2496000, 2690000, "B41", TDD},
+};
+BUILD_ASSERT(ARRAY_SIZE(bands_eu) == 10 && ARRAY_SIZE(bands_us) == 10);
+
+static const struct band *region_bands(void)
+{
+	return st.region_us ? bands_us : bands_eu;
+}
+
+/*
+ * The third label row (LABEL_H rows of @p buf, @p n pixels from @p left_khz over @p span_khz):
+ * the band strips (rows 0 and 1) and names, the Zigbee/Thread channels 11 to 26 (2405 to
+ * 2480 MHz, green ticks and numbers) and the QO-100 narrowband uplink (2400.05 to 2400.3).
+ * Over the trace, so they stay visible.
+ */
+static void draw_bands(uint16_t *buf, unsigned int stride, unsigned int n, int left_khz,
+		       int span_khz)
+{
+	static bool used[W];
+	const struct band *b = region_bands();
+
+	memset(used, 0, sizeof(used));
+#define KHZ_X(khz) ((int)(((int64_t)(khz) - left_khz) * (int64_t)n / span_khz))
+	/* A label centred on x, if it fits and nothing is there yet. */
+#define LABEL(x, text, color)                                                                      \
+	do {                                                                                       \
+		int len_ = 6 * (int)strlen(text) - 1, lx_ = (x) - len_ / 2;                          \
+		bool free_ = lx_ >= 0 && lx_ + len_ < (int)n;                                        \
+		for (int i_ = MAX(lx_ - 1, 0); free_ && i_ <= MIN(lx_ + len_, (int)n - 1); i_++) {     \
+			free_ = !used[i_];                                                           \
+		}                                                                                  \
+		if (free_) {                                                                       \
+			draw_text_w(buf, stride, (unsigned int)lx_, 2, text, color);                 \
+			for (int i_ = lx_; i_ < lx_ + len_; i_++) {                                  \
+				used[i_] = true;                                                     \
+			}                                                                          \
+		}                                                                                  \
+	} while (0)
+
+	for (size_t i = 0; i < ARRAY_SIZE(bands_eu); i++) {
+		int a = MAX(KHZ_X(b[i].lo_khz), 0), z = MIN(KHZ_X(b[i].hi_khz), (int)n - 1);
+
+		if (b[i].color == 0 || z < a) {
+			continue;
+		}
+		for (int x = a; x <= z; x++) {
+			buf[x] = buf[stride + (unsigned int)x] = b[i].color;
+		}
+		if (6 * (int)strlen(b[i].name) - 1 <= z - a + 1) {
+			LABEL((a + z) / 2, b[i].name, b[i].color);
+		}
+	}
+	for (int ch = 11; ch <= 26; ch++) {
+		int x = KHZ_X(2405000 + 5000 * (ch - 11));
+		char num[4];
+
+		if (x < 0 || x >= (int)n) {
+			continue;
+		}
+		buf[x] = buf[stride + (unsigned int)x] = ZIGBEE;
+		snprintf(num, sizeof(num), "%d", ch);
+		LABEL(x, num, ZIGBEE);
+	}
+	int qa = KHZ_X(2400050), qz = KHZ_X(2400300);
+
+	if (qz >= 0 && qa < (int)n) {
+		for (int x = MAX(qa, 0); x <= MIN(qz, (int)n - 1); x++) {
+			buf[x] = buf[stride + (unsigned int)x] = RGB565(255, 255, 255);
+		}
+		LABEL((MAX(qa, 0) + MIN(qz, (int)n - 1)) / 2, "QO", RGB565(255, 255, 255));
+	}
+#undef LABEL
+#undef KHZ_X
+}
+
 static int chan_khz(int ch)
 {
 	return ch == 14 ? 2484000 : 2407000 + 5000 * ch;
@@ -665,6 +770,9 @@ static void draw_trace(void)
 				next = lx + 6 * (int)strlen(num) + 1;
 			}
 		}
+		if (y0 == 2U * LABEL_H) {
+			draw_bands(fb, W, W, st.view_khz - span_khz() / 2, span_khz());
+		}
 		if (y0 == LABEL_H) {
 			for (unsigned int x = 0; x < W; x++) {
 				char name[8];
@@ -688,7 +796,7 @@ static void draw_help(void)
 		"KEYS                  ESC: CLOSE",
 		",  /   SCROLL       (LEFT/RIGHT)",
 		";  .   SPAN 80-2 MHZ (UP/DOWN)",
-		"H      HOME (2440 MHZ, 16 MHZ SPAN)",
+		"H  HOME     1-9 0  JUMP TO BANDS",
 		"N  M   GAIN -/+       G  AGC",
 		"-  =   COLOUR FLOOR   A  AUTO",
 		"[  ]   COLOUR RANGE   W  CH. LINES",
@@ -696,8 +804,8 @@ static void draw_help(void)
 		"X      MASK STEADY LINES (LEARNED)",
 		"V      AUTO-ROTATE (HOLD UPRIGHT)",
 		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
-		"YELLOW 1-14: WI-FI CHANNELS",
-		"CYAN B37-39: BLUETOOTH LE ADVERTISING",
+		"YELLOW WI-FI  CYAN BLE  GREEN ZIGBEE",
+		"ORANGE MAST  BLUE PHONE  VIOLET TDD",
 	};
 	uint16_t bg = RGB565(16, 16, 40);
 
@@ -994,6 +1102,7 @@ static void side_trace(void)
 				    LABEL_H + 1U, name, BLE_COLOR);
 		}
 	}
+	draw_bands(&pbuf[2U * LABEL_H * PH], PH, PH, st.view_khz - span_khz() / 2, span_khz());
 	blit_strip(P_TRACE_Y, P_TRACE_H);
 }
 
@@ -1335,6 +1444,13 @@ static void handle_key(char k)
 	case '.':
 		set_span(MAX(st.span_i - 1, 0));
 		break;
+	case '1': case '2': case '3': case '4': case '5':
+	case '6': case '7': case '8': case '9': case '0': {
+		const struct band *b = &region_bands()[k == '0' ? 9 : k - '1'];
+
+		st.view_khz = (b->lo_khz + b->hi_khz) / 2;
+		break;
+	}
 	case 'h':
 		st.view_khz = FREQ_DEFAULT_MHZ * 1000;
 		set_span(SPAN_HOME);
@@ -2036,10 +2152,10 @@ static uint32_t loop_max_ms;
 static void print_status(void)
 {
 	con_printf("stat lo %d lo_khz %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
-	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d orient %d rotate %d acc %d %d %d loop_max %u\n",
+	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u\n",
 	       st.lo_mhz, lo_khz(), st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
 	       st.hide_spurs, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
-	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.orient, st.auto_rotate,
+	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.region_us ? "us" : "eu", st.orient, st.auto_rotate,
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
 	       (unsigned int)loop_max_ms);
 	loop_max_ms = 0U;
@@ -2107,7 +2223,7 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], post on|off, iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
-		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off\n");
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off, region eu|us\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
 	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
@@ -2182,6 +2298,10 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "peak") == 0 && parse_flag(arg, &flag)) {
 		st.peak = flag ? PEAK_BURSTS : 1;
 		con_printf("ok peak %d\n", st.peak);
+	} else if (strcmp(line, "region") == 0 && (strcmp(arg, "eu") == 0 || strcmp(arg, "us") == 0)) {
+		st.region_us = arg[0] == 'u';
+		st.side_dirty = true;
+		con_printf("ok region %s\n", arg);
 	} else if (strcmp(line, "hide") == 0 && parse_flag(arg, &flag)) {
 		st.hide_spurs = flag;
 		con_printf("ok hide %d\n", st.hide_spurs);

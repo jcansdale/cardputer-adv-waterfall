@@ -114,6 +114,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``;``   narrower span, down to 2 MHz (up arrow)
 ``.``   wider span, up to 80 MHz (down arrow)
 ``h``   back to 2440 MHz, 16 MHz span
+``1``   to ``9`` and ``0``: jump to a band (table below)
 ``-``   colour floor -2 dB (manual)
 ``=``   colour floor +2 dB (manual)
 ``[``   colour range -5 dB
@@ -136,6 +137,29 @@ dark cyan ticks under them mark the 37 data channels (every 2 MHz from 2404 to 2
 which connected devices hop between. The
 overlay adds dotted lines through the trace and waterfall (cyan for Bluetooth) and tints the
 20 MHz of the non-overlapping Wi-Fi channels 1, 6 and 11 in the trace.
+
+A third row marks the other services in the tuning range, each as a coloured strip with its
+name where it fits: orange where masts transmit, blue where phones do, violet where both take
+turns (TDD), pink DECT, grey satellites. Green ticks and numbers are the Zigbee/Thread channels
+11 to 26 (2405 to 2480 MHz), white ``QO`` the QO-100 satellite's narrowband uplink (2400.05 to
+2400.3 MHz). The number keys jump to the bands' centres, in order:
+
+===  ==================================  ==================================
+Key  Europe/UK (default)                 US (``$region us``)
+===  ==================================  ==================================
+1    B3 DL, 4G masts, 1805-1880          B25 UL, phones, 1850-1915
+2    DECT cordless phones, 1880-1900     DECT 6.0, 1920-1930
+3    B1 UL, 3G/4G phones, 1920-1980      B25 DL, masts, 1930-1995
+4    B1 DL, 3G/4G masts, 2110-2170       B66 DL, masts, 2110-2200
+5    B40, 4G/5G TDD, 2300-2400           B30 UL, phones, 2305-2315
+6    ISM: Wi-Fi, BLE, Zigbee, 2400-2483  SXM, SiriusXM satellite, 2320-2345
+7    GSTAR, Globalstar down, 2483-2500   B30 DL, masts, 2350-2360
+8    B7 UL, 4G phones, 2500-2570         ISM, 2400-2483
+9    B38, 4G TDD, 2570-2620              GSTAR, Globalstar down, 2483-2500
+0    B7 DL, 4G masts, 2620-2690          B41, 4G/5G TDD, 2496-2690
+===  ==================================  ==================================
+
+The allocations are approximate and vary by country and operator.
 
 The view centre is limited to 1800 to 2800 MHz. The keys also work typed on the USB console.
 With ``$text on`` (below) the console prints a ``spec`` line every 2 s: the view, then the 240
@@ -168,6 +192,7 @@ Command               Action
 ``$gain <n|auto>``    fixed gain table index or AGC
 ``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
 ``$hide on|off``      the steady-line mask (display only)
+``$region eu|us``     which band table labels the third row and the number keys
 ``$post on|off``      ``$bins`` frames after the mask, as drawn, instead of before it
 ``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
                       ``right`` (that edge down, portrait)
