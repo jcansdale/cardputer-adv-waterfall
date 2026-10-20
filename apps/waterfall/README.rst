@@ -16,11 +16,13 @@ no MicroPython, no LVGL, no PSRAM (the Stamp-S3A has none).
 
 Each row is a Welch average of Hann-windowed 1024-point FFTs over one 4096-sample burst at
 16, 40 or 80 MS/s. The up and down keys step the screen's span through 80, 40, 16, 8, 4 and
-2 MHz, and each span takes the narrowest sample rate that covers it, for the finest bins:
-80 and 40 MHz capture at 80 and 40 MS/s, 16 MHz and below at 16 MS/s (8 to 2 MHz show part of
-that capture). The radio's analog filters only pass about +-10 MHz at 16 MS/s and, in the
-PHY's 40 MHz mode used at 40 and 80 MS/s, about +-18 MHz, so the outer parts of a wide view
-are attenuated; each pixel takes the strongest bin under it. Below 16 MHz, time resolution
+2 MHz: 80 MHz captures at 80 MS/s, 40 and 16 MHz at 40 MS/s, 8 to 2 MHz at 16 MS/s (each
+showing part of the capture). The radio's analog filters pass about +-10 MHz at 16 MS/s and,
+in the PHY's 40 MHz mode used at 40 and 80 MS/s, about +-18 MHz, so the outer parts of a wide
+view are attenuated. At 16 MS/s that is wider than the capture itself: whatever lies 8 to
+10 MHz out folds back in at the other edge (Wi-Fi at 2402 MHz showed 21 dB up at 2386 when
+tuned to 2393), which is why 16 MHz is captured at 40 MS/s (its 39 kHz bins are still finer
+than the pixels) and the zoomed-in spans keep to the middle of their capture; each pixel takes the strongest bin under it. Below 16 MHz, time resolution
 grows with the frequency resolution: the screen is redrawn after 2, 4 or 8 captured rows
 instead of one, each taking its share of the peak hold's bursts (8 at 16 MHz, 1 each at
 2 MHz), so the waterfall scrolls at about the same speed with more detail.

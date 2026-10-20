@@ -96,16 +96,24 @@ SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
  * One ladder of screen spans for the zoom keys: each takes the narrowest sample rate that
  * covers it (the finest bins), and the narrow ones a part of the 16 MS/s capture.
  */
+/*
+ * The spans: the capture rate, the screen's span, and the zoom, the captured rows per redraw
+ * (time resolution grows with frequency resolution below 16 MHz). 16 MHz is captured at
+ * 40 MS/s: at 16 MS/s the analog filters pass about +-10 MHz, wider than the capture, and
+ * whatever lies 8 to 10 MHz out folded back in at the other edge (Wi-Fi at 2402 MHz showed
+ * 21 dB up at 2386, tuned to 2393). Its 39 kHz bins are still finer than the pixels.
+ */
 static const struct {
 	enum esp_sdr_rate rate;
+	int span_mhz;
 	int zoom;
 } spans[] = {
-	{ESP_SDR_RATE_80MSPS, 1}, /* 80 MHz */
-	{ESP_SDR_RATE_40MSPS, 1}, /* 40 MHz */
-	{ESP_SDR_RATE_16MSPS, 1}, /* 16 MHz */
-	{ESP_SDR_RATE_16MSPS, 2}, /* 8 MHz */
-	{ESP_SDR_RATE_16MSPS, 4}, /* 4 MHz */
-	{ESP_SDR_RATE_16MSPS, 8}, /* 2 MHz */
+	{ESP_SDR_RATE_80MSPS, 80, 1},
+	{ESP_SDR_RATE_40MSPS, 40, 1},
+	{ESP_SDR_RATE_40MSPS, 16, 1},
+	{ESP_SDR_RATE_16MSPS, 8, 2},
+	{ESP_SDR_RATE_16MSPS, 4, 4},
+	{ESP_SDR_RATE_16MSPS, 2, 8},
 };
 #define SPAN_HOME 2 /* 16 MHz */
 /* Wi-Fi is bursty: with peak hold each row is the per-bin maximum over this many bursts. */
@@ -178,13 +186,14 @@ static struct {
 	bool auto_rotate; /* the orientation follows the accelerometer */
 	bool side_dirty;  /* the portrait layout needs drawing in full */
 	bool region_us;   /* the band labels: Europe/UK (false) or the US */
+	int bw_mhz;       /* the analog low-pass filter at 16 MS/s, two-sided MHz */
 } st = {
 	.lo_mhz = FREQ_DEFAULT_MHZ,
 	.view_khz = FREQ_DEFAULT_MHZ * 1000,
 	.span_i = SPAN_HOME,
 	.zoom = 1,
 	.peak = PEAK_BURSTS,
-	.rate = ESP_SDR_RATE_16MSPS,
+	.rate = ESP_SDR_RATE_40MSPS, /* spans[SPAN_HOME] */
 	/* Fixed mid gain: the AGC re-levels each burst and flattens bursty Wi-Fi into the noise. */
 	.gain = 42,
 	.auto_floor = true,
@@ -198,6 +207,7 @@ static struct {
 	.text = false,
 	.screen = true,
 	.auto_rotate = true,
+	.bw_mhz = 16,
 	.hide_spurs = true,
 };
 
@@ -320,7 +330,7 @@ static int fs_khz(void)
 
 static int span_khz(void)
 {
-	return fs_khz() / st.zoom;
+	return spans[st.span_i].span_mhz * 1000;
 }
 
 static uint8_t *hist_row(unsigned int age)
@@ -1507,7 +1517,7 @@ static void apply_radio(void)
 	if (ret != 0) {
 		LOG_WRN("channel_bw: %d", ret);
 	}
-	ret = esp_sdr_rx_set_bandwidth(wide ? 0U : CLAMP(16U, bw_min, bw_max));
+	ret = esp_sdr_rx_set_bandwidth(wide ? 0U : CLAMP((uint32_t)st.bw_mhz, bw_min, bw_max));
 	if (ret != 0) {
 		LOG_WRN("rx bandwidth: %d", ret);
 	}
@@ -2249,7 +2259,7 @@ static void handle_cmd(char *line)
 		int i;
 
 		for (i = 0; i < (int)ARRAY_SIZE(spans); i++) {
-			if ((int)(esp_sdr_rx_rate_hz(spans[i].rate) / 1000000U) / spans[i].zoom == v) {
+			if (spans[i].span_mhz == v) {
 				break;
 			}
 		}
@@ -2291,6 +2301,10 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "peak") == 0 && parse_flag(arg, &flag)) {
 		st.peak = flag ? PEAK_BURSTS : 1;
 		con_printf("ok peak %d\n", st.peak);
+	} else if (strcmp(line, "bw") == 0 && parse_int(arg, &v) && v >= 1 && v <= 80) {
+		st.bw_mhz = (int)v;
+		st.dirty_radio = true;
+		con_printf("ok bw %d\n", st.bw_mhz);
 	} else if (strcmp(line, "region") == 0 && (strcmp(arg, "eu") == 0 || strcmp(arg, "us") == 0)) {
 		st.region_us = arg[0] == 'u';
 		st.side_dirty = true;
