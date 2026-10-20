@@ -959,6 +959,8 @@ static unsigned int scroll_tfa(void)
 	return PANEL_X0 + (right_on_top() ? 0U : TOP);
 }
 
+static unsigned int scroll_on_tfa; /* the scroll area scroll_start() set up */
+
 static void scroll_start(void)
 {
 	unsigned int tfa = scroll_tfa();
@@ -967,6 +969,7 @@ static void scroll_start(void)
 	scroll_off = 0;
 	panel_cmd(ST7789_VSCSAD, tfa, 0, 0, 1);
 	scroll_on = true;
+	scroll_on_tfa = tfa;
 }
 
 static void blit_rect(unsigned int x, unsigned int y, unsigned int w, unsigned int h,
@@ -1213,15 +1216,26 @@ static void side_scale(void)
 }
 
 /* Everything, the history unscrolled: newest under the trace. */
+/*
+ * Everything, newest row first. The scroll stays where it is (a reset showed the old picture
+ * shifted until rewritten, a jump): each row goes where it scrolled to, so the redraw
+ * replaces the picture in place, top down. Only a new scroll area (rotated) resets it.
+ */
 static void side_full(void)
 {
+	unsigned int tfa = scroll_tfa(), top = PANEL_X0 + panel_x(TOP);
+	unsigned int back = right_on_top() ? SIDE_COLS - 1U : 1U; /* one row older */
+
 	build_overlay();
-	scroll_start();
+	if (!scroll_on || scroll_on_tfa != tfa) {
+		scroll_start();
+	}
 	side_header();
 	side_scale();
 	side_trace();
 	for (unsigned int age = 0; age < SIDE_COLS; age++) {
-		side_row(hist_row(age), side_rows - age, panel_x(TOP + age));
+		side_row(hist_row(age), side_rows - age,
+			 tfa + (top - tfa + scroll_off + age * back) % SIDE_COLS - PANEL_X0);
 	}
 	st.side_dirty = false;
 }
