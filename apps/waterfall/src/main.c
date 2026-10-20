@@ -2098,6 +2098,19 @@ static void sweep_patch(int lo)
 		patch_bins((int)lroundf((float)(khz - lo) * (float)NFFT / (float)fs_khz()));
 	}
 	patch_bins((int)lroundf((float)(lo_spur_khz(lo) - lo) * (float)NFFT / (float)fs_khz()));
+
+	/*
+	 * Tuned below about 1842 MHz, the bottom of the range, the receiver makes more: up to
+	 * +14 dB between 3.3 and 2.5 MHz below the LO (drifting with it), and weaker ones 8.5 and
+	 * 11.1 MHz below. Measured at LOs from 1805 to 1844 MHz.
+	 */
+	if (lo < 1842000) {
+		static const int16_t ofs_khz[] = {-3300, -2900, -2500, -8520, -11090};
+
+		for (size_t i = 0; i < ARRAY_SIZE(ofs_khz); i++) {
+			patch_bins((int)lroundf((float)ofs_khz[i] * (float)NFFT / (float)fs_khz()));
+		}
+	}
 }
 
 #define SWEEP_STEP_KHZ 32000
@@ -2456,6 +2469,10 @@ static void handle_cmd(char *line)
 		st.bw_mhz = (int)v;
 		st.dirty_radio = true;
 		con_printf("ok bw %d\n", st.bw_mhz);
+	} else if (strcmp(line, "settle") == 0 && parse_int(arg, &v) && v >= 0 && v <= 3000) {
+		/* The wait after each retune, 200 us by default (see main()). */
+		esp_sdr_set_retune_settle((uint32_t)v);
+		con_printf("ok settle %d\n", (int)v);
 	} else if (strcmp(line, "region") == 0 && (strcmp(arg, "eu") == 0 || strcmp(arg, "us") == 0)) {
 		st.region_us = arg[0] == 'u';
 		st.side_dirty = true;

@@ -40,7 +40,10 @@ default; captures right after a 40 MHz hop matched settled ones with no wait at 
 the app sets 200 us (``esp_sdr_set_retune_settle()``) and a step takes about 1.6 ms. Rows a
 second at ``P8``: 60 at 160 MHz, 35 at 320, 20 at 640, 11 at 1000; peak hold takes P/8 bursts
 per step. Each step sees only 13 us of the air per row, so short bursts are often missed, and
-the steps show as a faint 1 to 2 dB ripple. The steady-line mask is off while sweeping.
+the steps show as a faint 1 to 2 dB ripple. The steady-line mask is off while sweeping; ``x``
+patches the clock harmonics and each step's LO spurs instead, including those the receiver
+makes when tuned below about 1842 MHz (up to +14 dB, 2.5 to 3.3 MHz below the LO). ``$settle``
+changes the wait after each retune, for experiments.
 
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
 FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. A redraw takes
