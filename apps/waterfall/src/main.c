@@ -432,7 +432,14 @@ static void follow_view(void)
 		}
 		spur = lo_spur_khz(below);
 		set_lo_khz(spur > a - 150 && spur < b + 150 ? b + gap : below);
-	} else if (st.view_khz - span / 2 < lo - half || st.view_khz + span / 2 > lo + half) {
+	} else {
+		/*
+		 * Not zoomed in: the LO at the view centre, so the analog passband (and its
+		 * dimmed edges at 80 MHz) stays centred while scrolling; 40 and 16 MHz capture more
+		 * than they show, and a LO left where it was would drift across the screen.
+		 */
+		ARG_UNUSED(half);
+		ARG_UNUSED(lo);
 		set_lo_khz((st.view_khz + 500) / 1000 * 1000);
 	}
 }
