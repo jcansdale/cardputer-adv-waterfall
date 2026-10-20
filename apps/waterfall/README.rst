@@ -140,8 +140,9 @@ overlay adds dotted lines through the trace and waterfall (cyan for Bluetooth) a
 
 The same row marks the other services in the tuning range, which never overlap 2.4 GHz Wi-Fi:
 each band is a coloured line through the middle of the row, broken around its name where it
-fits, orange where masts transmit, blue where phones do, violet where both take turns (TDD),
-pink DECT, grey satellites. The number keys jump to the bands' centres, in order:
+fits, orange where masts transmit (``4G MAST``), blue where phones do (``4G PHONE``), violet
+where both take turns (TDD), pink DECT, grey satellites. Where a readable name does not fit
+(the band mostly off the screen) its short code shows instead, for example ``B1 DL``. The number keys jump to the bands' centres, in order:
 
 ===  ==================================  ==================================
 Key  Europe/UK (default)                 US (``$region us``)

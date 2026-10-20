@@ -562,22 +562,23 @@ static const struct {
 #define SAT    RGB565(170, 170, 170)
 struct band {
 	int lo_khz, hi_khz;
-	const char *name;
-	uint16_t color; /* 0: no strip */
+	const char *name; /* readable, if it fits */
+	uint16_t color;   /* 0: no strip */
+	const char *code; /* where it does not (NULL: the name only) */
 };
 static const struct band bands_eu[] = {
-	{1805000, 1880000, "B3 DL", MAST},   {1880000, 1900000, "DECT", DECTC},
-	{1920000, 1980000, "B1 UL", PHONE},  {2110000, 2170000, "B1 DL", MAST},
-	{2300000, 2400000, "B40", TDD},      {2400000, 2483500, "ISM", 0},
-	{2483500, 2500000, "GSTAR", SAT},    {2500000, 2570000, "B7 UL", PHONE},
-	{2570000, 2620000, "B38", TDD},      {2620000, 2690000, "B7 DL", MAST},
+	{1805000, 1880000, "4G MAST", MAST, "B3 DL"},   {1880000, 1900000, "DECT", DECTC},
+	{1920000, 1980000, "4G PHONE", PHONE, "B1 UL"}, {2110000, 2170000, "4G MAST", MAST, "B1 DL"},
+	{2300000, 2400000, "B40", TDD},                 {2400000, 2483500, "ISM", 0},
+	{2483500, 2500000, "GSTAR", SAT},               {2500000, 2570000, "4G PHONE", PHONE, "B7 UL"},
+	{2570000, 2620000, "B38", TDD},                 {2620000, 2690000, "4G MAST", MAST, "B7 DL"},
 };
 static const struct band bands_us[] = {
-	{1850000, 1915000, "B25 UL", PHONE}, {1920000, 1930000, "DECT6", DECTC},
-	{1930000, 1995000, "B25 DL", MAST},  {2110000, 2200000, "B66 DL", MAST},
-	{2305000, 2315000, "B30 UL", PHONE}, {2320000, 2345000, "SXM", SAT},
-	{2350000, 2360000, "B30 DL", MAST},  {2400000, 2483500, "ISM", 0},
-	{2483500, 2500000, "GSTAR", SAT},    {2496000, 2690000, "B41", TDD},
+	{1850000, 1915000, "4G PHONE", PHONE, "B25 UL"}, {1920000, 1930000, "DECT6", DECTC},
+	{1930000, 1995000, "4G MAST", MAST, "B25 DL"},   {2110000, 2200000, "4G MAST", MAST, "B66 DL"},
+	{2305000, 2315000, "4G PHONE", PHONE, "B30 UL"}, {2320000, 2345000, "SXM", SAT},
+	{2350000, 2360000, "4G MAST", MAST, "B30 DL"},   {2400000, 2483500, "ISM", 0},
+	{2483500, 2500000, "GSTAR", SAT},                {2496000, 2690000, "B41", TDD},
 };
 BUILD_ASSERT(ARRAY_SIZE(bands_eu) == 10 && ARRAY_SIZE(bands_us) == 10);
 
@@ -599,17 +600,25 @@ static void draw_bands(uint16_t *buf, unsigned int stride, unsigned int n, int l
 	for (size_t i = 0; i < ARRAY_SIZE(bands_eu); i++) {
 		int a = MAX((int)(((int64_t)b[i].lo_khz - left_khz) * n / span_khz), 0);
 		int z = MIN((int)(((int64_t)b[i].hi_khz - left_khz) * n / span_khz), (int)n - 1);
-		int len = 6 * (int)strlen(b[i].name) - 1, lx = (a + z) / 2 - len / 2;
-		bool free = len + 2 <= z - a + 1 && lx >= 1 && lx + len < (int)n - 1;
+		const char *cand[] = {b[i].name, b[i].code}, *text = NULL;
+		int len = 0, lx = 0;
+		bool free = false;
 
 		if (b[i].color == 0 || z < a) {
 			continue;
 		}
-		for (int x = MAX(lx - 1, 0); free && x <= MIN(lx + len, (int)n - 1); x++) {
-			free = !taken[x];
+		/* The readable name, else the short code, whichever fits first. */
+		for (size_t t = 0; t < ARRAY_SIZE(cand) && !free && cand[t] != NULL; t++) {
+			text = cand[t];
+			len = 6 * (int)strlen(text) - 1;
+			lx = (a + z) / 2 - len / 2;
+			free = len + 2 <= z - a + 1 && lx >= 1 && lx + len < (int)n - 1;
+			for (int x = MAX(lx - 1, 0); free && x <= MIN(lx + len, (int)n - 1); x++) {
+				free = !taken[x];
+			}
 		}
 		if (free) {
-			draw_text_w(buf, stride, (unsigned int)lx, 1, b[i].name, b[i].color);
+			draw_text_w(buf, stride, (unsigned int)lx, 1, text, b[i].color);
 			for (int x = lx; x < lx + len; x++) {
 				taken[x] = true;
 			}
