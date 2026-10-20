@@ -110,7 +110,7 @@ static const struct {
 	int span_mhz;
 	int zoom;
 } spans[] = {
-	{ESP_SDR_RATE_80MSPS, 1000, 1}, /* swept: sweeping() */
+	{ESP_SDR_RATE_80MSPS, 1000, 1}, /* swept, down to 80: sweeping() */
 	{ESP_SDR_RATE_80MSPS, 640, 1},
 	{ESP_SDR_RATE_80MSPS, 320, 1},
 	{ESP_SDR_RATE_80MSPS, 160, 1},
@@ -1416,12 +1416,12 @@ static char kbd_poll(void)
 
 static bool sweeping(void)
 {
-	return spans[st.span_i].span_mhz > 80;
+	return spans[st.span_i].span_mhz >= 80;
 }
 
 static void set_span(int i)
 {
-	if ((spans[i].span_mhz > 80) != sweeping()) {
+	if ((spans[i].span_mhz >= 80) != sweeping()) {
 		st.dirty_radio = true; /* a sweep leaves the radio wherever it ended */
 	}
 	if (spans[i].rate != st.rate) {
@@ -2066,7 +2066,8 @@ static void lo_bridge(void)
 static void commit_row(float sum, unsigned int valid);
 
 /*
- * The spans wider than 80 MHz (160 to 1000) sweep: the view in steps of at most 32 MHz, each
+ * The spans of 80 MHz and wider sweep (80 in 3 steps; a single capture's filters passed only
+ * +-18 MHz of its 80, the rest dim): the view in steps of at most 32 MHz, each
  * captured at 80 MS/s with the LO at its centre, of which only the middle (inside the
  * filters' +-18 MHz, clear of the edges) is used. A step is a retune (about 1 ms with the
  * short settle), SWEEP_SAMPLES samples and one FFT; peak hold takes the maximum of P/8 of

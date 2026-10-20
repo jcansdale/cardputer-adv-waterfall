@@ -16,7 +16,7 @@ no MicroPython, no LVGL, no PSRAM (the Stamp-S3A has none).
 
 Each row is a Welch average of Hann-windowed 1024-point FFTs over one 4096-sample burst at
 16, 40 or 80 MS/s. The up and down keys step the screen's span through 1000, 640, 320, 160,
-80, 40, 16, 8, 4 and 2 MHz (the widest four sweep, below): 80 and 40 MHz capture at 80 MS/s, 16 and 8 MHz at 40 MS/s, 4 and 2 MHz at 16 MS/s
+80, 40, 16, 8, 4 and 2 MHz (80 and wider sweep, below): 40 MHz captures at 80 MS/s, 16 and 8 MHz at 40 MS/s, 4 and 2 MHz at 16 MS/s
 (each showing part of the capture). The radio's analog filters pass about +-10 MHz at 16 MS/s and,
 in the PHY's 40 MHz mode used at 40 and 80 MS/s, about +-18 MHz, so the outer parts of a wide
 view are attenuated. At 16 MS/s that is wider than the capture itself: whatever lies 8 to
@@ -31,14 +31,14 @@ instead of one, each taking its share of the peak hold's bursts (8 at 16 MHz, 1 
 Scrolling past the captured span retunes the radio, and the waterfall history is shifted and
 rescaled to stay lined up.
 
-The spans wider than 80 MHz sweep: each row retunes across the view in steps of at most
-32 MHz (5 at 160 MHz, 32 for the whole 1000 MHz from 1800 to 2800), captures 1024 samples at
+The spans of 80 MHz and wider sweep: each row retunes across the view in steps of at most
+32 MHz (3 at 80 MHz, 5 at 160, 32 for the whole 1000 MHz from 1800 to 2800), captures 1024 samples at
 80 MS/s at each and keeps the middle of each step, inside the filters' passband, so the band
 plan shows at a glance (the band names fit). The library waits 3 ms after every retune by
 default; captures right after a 40 MHz hop matched settled ones with no wait at all
 (passband within 0.15 dB, clock harmonics 0.5 dB, also across the 5/6 divider at 2210 MHz), so
 the app sets 200 us (``esp_sdr_set_retune_settle()``) and a step takes about 1.6 ms. Rows a
-second at ``P8``: 60 at 160 MHz, 35 at 320, 20 at 640, 11 at 1000; peak hold takes P/8 bursts
+second at ``P8``: 85 at 80 MHz, 60 at 160 MHz, 35 at 320, 20 at 640, 11 at 1000; peak hold takes P/8 bursts
 per step. Each step sees only 13 us of the air per row, so short bursts are often missed, and
 the steps show as a faint 1 to 2 dB ripple. The steady-line mask is off while sweeping; ``x``
 patches the clock harmonics and each step's LO spurs instead, including those the receiver
@@ -205,7 +205,7 @@ Command               Action
 ``$screen on|off``    drawing; without it rows come up to 4 times faster
 ``$tune <kHz>``       the view centre (retunes as needed)
 ``$lo <MHz>``         the LO alone, the view staying put when it fits
-``$span <MHz>``       1000, 640, 320, 160 (swept), 80, 40, 16, 8, 4 or 2
+``$span <MHz>``       1000, 640, 320, 160, 80 (swept), 40, 16, 8, 4 or 2
 ``$gain <n|auto>``    fixed gain table index or AGC
 ``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
 ``$hide on|off``      the steady-line mask (display only)
