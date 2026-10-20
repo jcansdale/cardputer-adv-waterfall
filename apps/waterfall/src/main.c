@@ -110,6 +110,10 @@ static const struct {
 	int span_mhz;
 	int zoom;
 } spans[] = {
+	{ESP_SDR_RATE_80MSPS, 1000, 1}, /* swept: sweeping() */
+	{ESP_SDR_RATE_80MSPS, 640, 1},
+	{ESP_SDR_RATE_80MSPS, 320, 1},
+	{ESP_SDR_RATE_80MSPS, 160, 1},
 	{ESP_SDR_RATE_80MSPS, 80, 1},
 	{ESP_SDR_RATE_80MSPS, 40, 1},
 	{ESP_SDR_RATE_40MSPS, 16, 1},
@@ -117,7 +121,8 @@ static const struct {
 	{ESP_SDR_RATE_16MSPS, 4, 4},
 	{ESP_SDR_RATE_16MSPS, 2, 8},
 };
-#define SPAN_HOME 2 /* 16 MHz */
+#define SPAN_HOME 6 /* 16 MHz */
+static bool sweeping(void);
 /* Wi-Fi is bursty: with peak hold each row is the per-bin maximum over this many bursts. */
 #define PEAK_BURSTS 8 /* the default; p steps through 8, 4, 2, 1, 32, 16 */
 #define PEAK_MAX    32
@@ -484,7 +489,8 @@ static void draw_header(void)
  */
 static void draw_scale(void)
 {
-	static const int steps[] = {10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000};
+	static const int steps[] = {10,    20,    50,    100,   200,    500,    1000,
+				    2000,  5000,  10000, 20000, 50000, 100000, 200000};
 	int span = span_khz(), left = st.view_khz - span / 2;
 	int step = steps[ARRAY_SIZE(steps) - 1], label = step;
 	uint16_t fg = RGB565(200, 200, 200);
@@ -669,7 +675,7 @@ static void build_overlay(void)
 
 	pass_a = 0;
 	pass_b = W;
-	if (st.rate != ESP_SDR_RATE_16MSPS) {
+	if (st.rate != ESP_SDR_RATE_16MSPS && !sweeping()) {
 		int lo = lo_khz();
 
 		pass_a = CLAMP((int)(((int64_t)lo - PASS_KHZ - left) * W / span), 0, (int)W);
@@ -803,7 +809,7 @@ static void draw_help(void)
 	static const char *const lines[] = {
 		"KEYS                  ESC: CLOSE",
 		",  /   SCROLL       (LEFT/RIGHT)",
-		";  .   SPAN 80-2 MHZ (UP/DOWN)",
+		";  .   SPAN 1000-2 MHZ (UP/DOWN)",
 		"H  HOME     1-9 0  JUMP TO BANDS",
 		"N  M   GAIN -/+       G  AGC",
 		"-  =   DARKER/BRIGHTER  A  AUTO",
@@ -1143,8 +1149,8 @@ static void side_header(void)
 /* The scale, as in landscape: MHz on top, ticks under them (taller on whole MHz), markers. */
 static void side_scale(void)
 {
-	static const int ticks[] = {100, 200, 500, 1000, 2000, 5000, 10000, 20000};
-	static const int labels[] = {1000, 2000, 5000, 10000, 20000, 50000};
+	static const int ticks[] = {100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000};
+	static const int labels[] = {1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000};
 	int span = span_khz(), left = st.view_khz - span / 2;
 	int tick = ticks[ARRAY_SIZE(ticks) - 1], label = labels[ARRAY_SIZE(labels) - 1];
 	char text[12];
@@ -1408,8 +1414,16 @@ static char kbd_poll(void)
 }
 #endif
 
+static bool sweeping(void)
+{
+	return spans[st.span_i].span_mhz > 80;
+}
+
 static void set_span(int i)
 {
+	if ((spans[i].span_mhz > 80) != sweeping()) {
+		st.dirty_radio = true; /* a sweep leaves the radio wherever it ended */
+	}
 	if (spans[i].rate != st.rate) {
 		st.rate = spans[i].rate;
 		st.dirty_radio = true; /* the analog filters follow the rate */
@@ -1422,6 +1436,10 @@ static void set_span(int i)
 static void view_changed(int old_view, int old_span, int old_zoom)
 {
 	st.view_khz = CLAMP(st.view_khz, FREQ_MIN_MHZ * 1000, FREQ_MAX_MHZ * 1000);
+	if (sweeping()) { /* a sweep stays within the tuning range */
+		st.view_khz = CLAMP(st.view_khz, FREQ_MIN_MHZ * 1000 + span_khz() / 2,
+				    FREQ_MAX_MHZ * 1000 - span_khz() / 2);
+	}
 	follow_view();
 	if (st.view_khz != old_view || span_khz() != old_span) {
 		hist_remap(old_view, old_span, old_zoom);
@@ -1767,12 +1785,12 @@ static void fft_check(void)
 		k_cyc_to_us_floor32(t_c), (double)(err / top), use_dsp ? "esp-dsp" : "C");
 }
 
-static int capture_psd(void)
+static int capture_psd_n(size_t count)
 {
 	struct esp_sdr_rx_burst b;
 	unsigned int segments;
 	float dc_i = 0.0f, dc_q = 0.0f;
-	int ret = esp_sdr_rx_capture(st.rate, SAMPLES, &b);
+	int ret = esp_sdr_rx_capture(st.rate, count, &b);
 
 	if (ret != 0) {
 		return ret;
@@ -1816,6 +1834,11 @@ static int capture_psd(void)
 		}
 	}
 	return (int)segments;
+}
+
+static int capture_psd(void)
+{
+	return capture_psd_n(SAMPLES);
 }
 
 /*
@@ -2017,6 +2040,106 @@ static void mask_update(bool apply)
 	}
 }
 
+/*
+ * The LO leakage and DC residue, with the skirt around them (+3 dB out to about 110 kHz at
+ * every LO): bridged over 120 kHz either side, from the mean of three bins beyond each end.
+ * After the mask, which learns from the bins as captured: a smooth bridge has no noise
+ * spread, so its lower envelope stood above its neighbours' and the mask cut a 4 dB hole.
+ */
+static void lo_bridge(void)
+{
+	int w = (int)ceilf(120.0f * (float)NFFT / (float)fs_khz());
+	float l = 0.0f, r = 0.0f;
+
+	for (int j = 1; j <= 3; j++) {
+		l += psd[(unsigned int)((int)NFFT - w - j)];
+		r += psd[(unsigned int)(w + j)];
+	}
+	l /= 3.0f;
+	r /= 3.0f;
+	for (int k = -w; k <= w; k++) {
+		psd[(unsigned int)((k + (int)NFFT) % (int)NFFT)] =
+			l + (r - l) * (float)(k + w + 1) / (float)(2 * w + 2);
+	}
+}
+
+static void commit_row(float sum, unsigned int valid);
+
+/*
+ * The spans wider than 80 MHz (160 to 1000) sweep: the view in steps of at most 32 MHz, each
+ * captured at 80 MS/s with the LO at its centre, of which only the middle (inside the
+ * filters' +-18 MHz, clear of the edges) is used. A step is a retune (about 1 ms with the
+ * short settle), SWEEP_SAMPLES samples and one FFT; peak hold takes the maximum of P/8 of
+ * them per step (at least one). No steady-line mask (it learns per tuning) and no frames.
+ */
+#define SWEEP_STEP_KHZ 32000
+#define SWEEP_SAMPLES  NFFT
+static int capture_sweep(void)
+{
+	int span = span_khz(), left = st.view_khz - span / 2;
+	int n = DIV_ROUND_UP(span, SWEEP_STEP_KHZ), step = span / n;
+	unsigned int bursts = MAX((unsigned int)st.peak / 8U, 1U);
+	float bin_khz = (float)fs_khz() / (float)NFFT, sum = 0.0f;
+	unsigned int valid = 0;
+
+	for (unsigned int c = 0; c < W; c++) {
+		row_db[c] = FLOOR_DB;
+	}
+	for (int i = 0; i < n; i++) {
+		int a = left + i * step, centre = (a + step / 2 + 500) / 1000 * 1000;
+		int segments = 0;
+		int ret = esp_sdr_set_freq((uint32_t)(centre / 1000));
+
+		if (ret != 0 && ret != -ERANGE) {
+			continue;
+		}
+		for (unsigned int b = 0; b < bursts; b++) {
+			ret = capture_psd_n(SWEEP_SAMPLES);
+			if (ret < 0) {
+				return ret;
+			}
+			segments = ret;
+			if (b == 0U) {
+				memcpy(peak, psd, sizeof(peak));
+			} else {
+				for (unsigned int k = 0; k < NFFT; k++) {
+					peak[k] = MAX(peak[k], psd[k]);
+				}
+			}
+		}
+		memcpy(psd, peak, sizeof(psd));
+		lo_bridge();
+
+		float norm = 1.0f / (FULLSCALE * FULLSCALE * window_gain * (float)segments);
+		int xa = (int)((int64_t)(a - left) * W / span);
+		int xb = (int)((int64_t)(a + step - left) * W / span);
+
+		for (int x = MAX(xa, 0); x < MIN(xb, (int)W); x++) {
+			/* The pixel's frequencies, in bins about this step's LO. */
+			float fa = (float)left + (float)x * (float)span / (float)W - (float)centre;
+			int ma = (int)floorf(fa / bin_khz) + (int)(NFFT / 2U);
+			int mb = MAX((int)floorf((fa + (float)span / (float)W) / bin_khz) +
+					     (int)(NFFT / 2U),
+				     ma + 1);
+			float p = 0.0f;
+
+			ma = MAX(ma, 0);
+			mb = MIN(mb, (int)NFFT);
+			for (int m = ma; m < mb; m++) {
+				p = MAX(p, psd[((unsigned int)m + NFFT / 2U) % NFFT]);
+			}
+			p *= norm;
+			row_db[x] = p > 0.0f ? 10.0f * log10f(p) : FLOOR_DB;
+			sum += row_db[x];
+			valid++;
+		}
+		st.lo_mhz = centre / 1000;
+		st.lo_ofs_khz = 0;
+	}
+	commit_row(sum, valid);
+	return 0;
+}
+
 static int capture_row(void)
 {
 	/* Zoomed in, each of the zoom rows per redraw takes its share of the peak bursts. */
@@ -2051,27 +2174,7 @@ static int capture_row(void)
 	/* The board's own steady lines, learned and divided out (mask_update()). */
 	mask_update(st.hide_spurs);
 
-	/*
-	 * The LO leakage and DC residue, with the skirt around them (+3 dB out to about 110 kHz at
-	 * every LO): bridged over 120 kHz either side, from the mean of three bins beyond each end.
-	 * After the mask, which learns from the bins as captured: a smooth bridge has no noise
-	 * spread, so its lower envelope stood above its neighbours' and the mask cut a 4 dB hole.
-	 */
-	{
-		int w = (int)ceilf(120.0f * (float)NFFT / (float)fs_khz());
-		float l = 0.0f, r = 0.0f;
-
-		for (int j = 1; j <= 3; j++) {
-			l += psd[(unsigned int)((int)NFFT - w - j)];
-			r += psd[(unsigned int)(w + j)];
-		}
-		l /= 3.0f;
-		r /= 3.0f;
-		for (int k = -w; k <= w; k++) {
-			psd[(unsigned int)((k + (int)NFFT) % (int)NFFT)] =
-				l + (r - l) * (float)(k + w + 1) / (float)(2 * w + 2);
-		}
-	}
+	lo_bridge();
 	if (st.bins_left != 0 && st.bins_post) {
 		send_bins(psd, norm, bursts, (unsigned int)segments);
 	}
@@ -2117,6 +2220,13 @@ static int capture_row(void)
 		}
 	}
 
+	commit_row(sum, valid);
+	return 0;
+}
+
+/* row_db[] done: the automatic floor, the history, the trace and the console dump. */
+static void commit_row(float sum, unsigned int valid)
+{
 	if (st.auto_floor && valid > 0) {
 		/* Track the mean level; the floor sits a little below it. */
 		st.floor_db += 0.05f * (sum / (float)valid - 5.0f - st.floor_db);
@@ -2133,7 +2243,6 @@ static int capture_row(void)
 		dump_db[c] = dump_fresh ? row_db[c] : MAX(dump_db[c], row_db[c]);
 	}
 	dump_fresh = false;
-	return 0;
 }
 
 /*
@@ -2369,6 +2478,12 @@ int main(void)
 		LOG_ERR("esp_sdr_init: %d", ret);
 		return 0;
 	}
+	/*
+	 * Captures right after a 40 MHz hop matched settled ones (passband within 0.15 dB, clock
+	 * harmonics 0.5 dB, also across the 5/6 divider at 2210 MHz) with no wait at all, against
+	 * 3 ms by default: a retune now takes about 1 ms, which sets the speed of the sweeps.
+	 */
+	esp_sdr_set_retune_settle(200U);
 	printk("waterfall: radio ready, gain table 0..%d\n", esp_sdr_rx_gain_max());
 
 	last_ms = k_uptime_get_32();
@@ -2412,7 +2527,7 @@ int main(void)
 			st.side_dirty = true;
 		}
 		for (int n = 0; n < st.zoom && ret == 0; n++) {
-			ret = capture_row();
+			ret = sweeping() ? capture_sweep() : capture_row();
 			rows++;
 			if (ret == 0 && st.orient != ORIENT_LANDSCAPE && st.screen && !st.help && scroll_on &&
 			    !st.side_dirty) {

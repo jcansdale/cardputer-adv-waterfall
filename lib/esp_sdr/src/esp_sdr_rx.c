@@ -113,9 +113,21 @@ static void rx_front_end(bool retune, uint32_t settle_us)
 	k_busy_wait(settle_us);
 }
 
+/* The wait after a frequency change, esp_sdr_set_retune_settle(). */
+static uint32_t retune_settle_us = SDR_RETUNE_SETTLE_US;
+
+int esp_sdr_set_retune_settle(uint32_t us)
+{
+	if (us > SDR_RETUNE_SETTLE_US) {
+		return -EINVAL;
+	}
+	retune_settle_us = us;
+	return 0;
+}
+
 void esp_sdr_rx_prepare(void)
 {
-	rx_front_end(true, SDR_RETUNE_SETTLE_US);
+	rx_front_end(true, retune_settle_us);
 }
 
 void esp_sdr_rx_resume(void)

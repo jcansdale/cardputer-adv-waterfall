@@ -190,6 +190,18 @@ void esp_sdr_bbtop_write(unsigned int reg, unsigned int val);
  */
 int esp_sdr_set_turnaround(uint32_t settle_us, bool retune);
 
+/**
+ * @brief Set the wait after a frequency change before the radio is used (default 3000 us).
+ *
+ * Every esp_sdr_set_freq() and esp_sdr_set_freq_offset() retunes, sets the receiver up and
+ * then waits this long for the PLL and the analog front end to settle. A sweep that retunes
+ * often can shorten it; check that captures right after a retune match settled ones.
+ *
+ * @retval 0 on success.
+ * @retval -EINVAL for more than 3000 us.
+ */
+int esp_sdr_set_retune_settle(uint32_t us);
+
 /** @} */
 
 #ifdef __cplusplus
