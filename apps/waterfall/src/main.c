@@ -386,6 +386,11 @@ static void hist_remap(int old_view_khz, int old_span_khz, int old_zoom)
 		memcpy(hist[r], tmp, W);
 	}
 	st.trace_reset = true;
+	/*
+	 * The portrait layout redraws in full only now, when the history moved: any key used
+	 * to, and the whole picture jumped (the scroll reset and 175 columns rewritten).
+	 */
+	st.side_dirty = true;
 }
 
 /* Retune when the view leaves the span the radio captures. */
@@ -2575,9 +2580,6 @@ int main(void)
 		}
 		/* Zoomed in, zoom captures per redraw: time resolution grows with frequency's. */
 		ret = 0;
-		if (input) {
-			st.side_dirty = true;
-		}
 		for (int n = 0; n < st.zoom && ret == 0; n++) {
 			ret = sweeping() ? capture_sweep() : capture_row();
 			rows++;
