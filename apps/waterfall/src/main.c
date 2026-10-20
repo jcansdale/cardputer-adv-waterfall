@@ -2048,9 +2048,14 @@ static int capture_row(void)
 		send_bins(psd, norm, bursts, (unsigned int)segments);
 	}
 
+	/* The board's own steady lines, learned and divided out (mask_update()). */
+	mask_update(st.hide_spurs);
+
 	/*
 	 * The LO leakage and DC residue, with the skirt around them (+3 dB out to about 110 kHz at
 	 * every LO): bridged over 120 kHz either side, from the mean of three bins beyond each end.
+	 * After the mask, which learns from the bins as captured: a smooth bridge has no noise
+	 * spread, so its lower envelope stood above its neighbours' and the mask cut a 4 dB hole.
 	 */
 	{
 		int w = (int)ceilf(120.0f * (float)NFFT / (float)fs_khz());
@@ -2067,9 +2072,6 @@ static int capture_row(void)
 				l + (r - l) * (float)(k + w + 1) / (float)(2 * w + 2);
 		}
 	}
-
-	/* The board's own steady lines, learned and divided out (mask_update()). */
-	mask_update(st.hide_spurs);
 	if (st.bins_left != 0 && st.bins_post) {
 		send_bins(psd, norm, bursts, (unsigned int)segments);
 	}
