@@ -725,7 +725,7 @@ static unsigned int level(float db)
 
 static void draw_trace(void)
 {
-	uint16_t bg = RGB565(0, 0, 0), grid = RGB565(40, 40, 40);
+	uint16_t bg = RGB565(0, 0, 0), grid = RGB565(200, 200, 200);
 	uint16_t band = RGB565(0, 24, 48), mark = RGB565(110, 110, 110);
 
 	build_overlay();
@@ -739,7 +739,9 @@ static void draw_trace(void)
 			for (unsigned int r = 0; r < rows; r++) {
 				unsigned int y = y0 + r; /* 0 at the top */
 				unsigned int from_bottom = PSD_H - 1U - y;
-				uint16_t c = x == W / 2 ? grid : ch_band[x] ? band : bg;
+				/* The view centre: a short tick in the Bluetooth row, level with its ticks. */
+				uint16_t c = x == W / 2 && y >= 2U * LABEL_H - 3U && y < 2U * LABEL_H ? grid
+					     : ch_band[x] ? band : bg;
 
 				if (ch_at[x] != 0 &&
 				    ((y >= LABEL_H - 2U && y < LABEL_H) ||
