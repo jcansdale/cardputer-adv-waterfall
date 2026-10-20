@@ -16,13 +16,13 @@ no MicroPython, no LVGL, no PSRAM (the Stamp-S3A has none).
 
 Each row is a Welch average of Hann-windowed 1024-point FFTs over one 4096-sample burst at
 16, 40 or 80 MS/s. The up and down keys step the screen's span through 80, 40, 16, 8, 4 and
-2 MHz: 80 and 40 MHz capture at 80 MS/s, 16 MHz at 40 MS/s, 8 to 2 MHz at 16 MS/s (each
-showing part of the capture). The radio's analog filters pass about +-10 MHz at 16 MS/s and,
+2 MHz: 80 and 40 MHz capture at 80 MS/s, 16 and 8 MHz at 40 MS/s, 4 and 2 MHz at 16 MS/s
+(each showing part of the capture). The radio's analog filters pass about +-10 MHz at 16 MS/s and,
 in the PHY's 40 MHz mode used at 40 and 80 MS/s, about +-18 MHz, so the outer parts of a wide
 view are attenuated. At 16 MS/s that is wider than the capture itself: whatever lies 8 to
 10 MHz out folds back in at the other edge (Wi-Fi at 2402 MHz showed 21 dB up at 2386 when
-tuned to 2393), which is why 16 MHz is captured at 40 MS/s (its 39 kHz bins are still finer
-than the pixels) and the zoomed-in spans keep to the middle of their capture. At 40 MS/s the
+tuned to 2393), which is why 16 and 8 MHz are captured at 40 MS/s (39 kHz bins, about the
+pixels' width at 8 MHz) and 4 and 2 MHz keep to the middle of their capture. At 40 MS/s the
 filters' slow roll-off past +-18 MHz does the same at the edges (a mast at 2675 MHz showed at
 2635 when tuned to 2655), so 40 MHz is captured at 80 MS/s; each pixel takes the strongest bin under it. Below 16 MHz, time resolution
 grows with the frequency resolution: the screen is redrawn after 2, 4 or 8 captured rows
@@ -66,8 +66,7 @@ it a frequency scale with ticks (taller on whole MHz) and their values in MHz wh
 fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
 which has a narrow artefact of its own (LO leakage, patched over, with a skirt of about
 +-110 kHz) to ignore. Zoomed in to 8, 4 or 2 MHz the radio tunes just below the view instead
-(offset tuning: 250 kHz below at 8 MHz, whose last 250 kHz on the right are then beyond the
-capture and stay dark; 1 MHz below at 4 and 2 MHz), so that line is off the screen. The
+(offset tuning, 1 MHz below), so that line is off the screen. The
 receiver also makes a spur that moves with the LO, at LO + (LO - 2400 MHz) / 3 (2386.67 MHz
 when tuned to 2390): offset tuning goes above the view instead when below would put it on
 the screen. Scrolling keeps the tuning while it still serves (the view inside the capture,

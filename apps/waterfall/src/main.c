@@ -113,7 +113,7 @@ static const struct {
 	{ESP_SDR_RATE_80MSPS, 80, 1},
 	{ESP_SDR_RATE_80MSPS, 40, 1},
 	{ESP_SDR_RATE_40MSPS, 16, 1},
-	{ESP_SDR_RATE_16MSPS, 8, 2},
+	{ESP_SDR_RATE_40MSPS, 8, 2},
 	{ESP_SDR_RATE_16MSPS, 4, 4},
 	{ESP_SDR_RATE_16MSPS, 2, 8},
 };
@@ -123,6 +123,9 @@ static const struct {
 #define PEAK_MAX    32
 #define FULLSCALE 512.0f
 #define FLOOR_DB  (-150.0f)
+
+/* The 40 MHz PHY mode's analog filters pass about +-18 MHz (doc/hardware-quirks.md). */
+#define PASS_KHZ 18000
 
 #define FREQ_MIN_MHZ     1800
 #define FREQ_MAX_MHZ     2800
@@ -406,10 +409,10 @@ static int lo_spur_khz(int lo)
 }
 
 /*
- * Retune when the view leaves the span the radio captures. Zoomed in (8, 4, 2 MHz of the
- * 16 MS/s capture), offset tuning: the LO sits just outside the view (250 kHz at 8 MHz, the
- * capture then ends 250 kHz short of the far edge; 1 MHz at 4 and 2), so its line and the
- * skirt around it (+3 dB out to about 110 kHz, the same at every LO) stay off the screen.
+ * Retune when the view leaves the span the radio captures. Zoomed in (8 MHz of the 40 MS/s
+ * capture, 4 and 2 MHz of the 16 MS/s one), offset tuning: the LO sits 1 MHz outside the
+ * view, so its line and the skirt around it (+3 dB out to about 110 kHz, the same at every
+ * LO) stay off the screen, and the view stays clear of the capture's edges.
  * Below the view, unless that puts lo_spur_khz() in it: then above.
  */
 static void follow_view(void)
@@ -418,7 +421,7 @@ static void follow_view(void)
 
 	if (st.zoom > 1) {
 		int a = st.view_khz - span / 2, b = st.view_khz + span / 2;
-		int gap = st.zoom == 2 ? 250 : 1000, below = a - gap;
+		int gap = 1000, below = a - gap;
 		int spur = lo_spur_khz(lo);
 
 		/*
@@ -426,8 +429,14 @@ static void follow_view(void)
 		 * stays learned): the LO 200 kHz or more off the view, the view within the capture
 		 * (or as far over its edge as the 8 MHz placement goes), its spur off the view.
 		 */
-		if ((lo < a - 200 || lo > b + 200) && a >= lo - half - 250 && b <= lo + half + 250 &&
-		    (spur < a - 150 || spur > b + 150) && st.rate == ESP_SDR_RATE_16MSPS) {
+		/*
+		 * The clean part of the capture: at 40 MS/s the flat passband (2 MHz inside the
+		 * filters' +-18), at 16 MS/s 2 MHz inside the edges, where nothing folds in.
+		 */
+		int clean = (st.rate == ESP_SDR_RATE_16MSPS ? half : PASS_KHZ) - 2000;
+
+		if ((lo < a - 200 || lo > b + 200) && a >= lo - clean && b <= lo + clean &&
+		    (spur < a - 150 || spur > b + 150)) {
 			return;
 		}
 		spur = lo_spur_khz(below);
@@ -553,8 +562,6 @@ static void draw_scale(void)
  * inside Wi-Fi channel 1, 6 or 11 (20 MHz).
  */
 #define LABEL_H 10 /* one label row (text and tick); Wi-Fi first, Bluetooth below */
-/* The 40 MHz PHY mode's analog filters pass about +-18 MHz (doc/hardware-quirks.md). */
-#define PASS_KHZ 18000
 #define DIM(c)   (((c) >> 1) & 0x7befU) /* RGB565 at half brightness */
 static int pass_a, pass_b; /* pixels pass_a to pass_b - 1 are inside the analog filters */
 #define BLE_COLOR RGB565(0, 220, 255)
