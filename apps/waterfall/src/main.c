@@ -678,14 +678,12 @@ static void build_overlay(void)
 {
 	int span = span_khz(), left = st.view_khz - span / 2;
 
+	/*
+	 * Nothing to dim: every span stays inside the analog filters now (40 MHz flattened at its
+	 * edges, wider spans swept), so the whole width counts.
+	 */
 	pass_a = 0;
 	pass_b = W;
-	if (st.rate != ESP_SDR_RATE_16MSPS && !sweeping()) {
-		int lo = lo_khz();
-
-		pass_a = CLAMP((int)(((int64_t)lo - PASS_KHZ - left) * W / span), 0, (int)W);
-		pass_b = CLAMP((int)(((int64_t)lo + PASS_KHZ - left) * W / span) + 1, 0, (int)W);
-	}
 	memset(ch_at, 0, sizeof(ch_at));
 	memset(ble_at, 0, sizeof(ble_at));
 	memset(ble_data, 0, sizeof(ble_data));
@@ -1438,12 +1436,12 @@ static char kbd_poll(void)
 
 static bool sweeping(void)
 {
-	return spans[st.span_i].span_mhz >= 40;
+	return spans[st.span_i].span_mhz >= 80;
 }
 
 static void set_span(int i)
 {
-	if ((spans[i].span_mhz >= 40) != sweeping()) {
+	if ((spans[i].span_mhz >= 80) != sweeping()) {
 		st.dirty_radio = true; /* a sweep leaves the radio wherever it ended */
 	}
 	if (spans[i].rate != st.rate) {
@@ -2209,6 +2207,27 @@ static int capture_sweep(void)
 	return 0;
 }
 
+/*
+ * The 40 MHz span is one 80 MS/s capture (swept, its halves tore bursts that began or ended
+ * between them): the analog filters' roll-off at its edges, measured at three LOs, is
+ * -0.6 dB at 15 MHz from the LO, -1.2 at 17, -2.0 at 19, about 0.33 dB a MHz past 13: put back.
+ */
+static void edge_flatten(void)
+{
+	if (st.rate != ESP_SDR_RATE_80MSPS || sweeping()) {
+		return;
+	}
+	float bin_mhz = (float)fs_khz() / 1000.0f / (float)NFFT;
+
+	for (int k = -(int)NFFT / 2; k < (int)NFFT / 2; k++) {
+		float d = fabsf((float)k * bin_mhz) - 13.0f;
+
+		if (d > 0.0f) {
+			psd[(unsigned int)(k + (int)NFFT) % NFFT] *= powf(10.0f, 0.033f * MIN(d, 7.0f));
+		}
+	}
+}
+
 static int capture_row(void)
 {
 	/* Zoomed in, each of the zoom rows per redraw takes its share of the peak bursts. */
@@ -2244,24 +2263,13 @@ static int capture_row(void)
 	mask_update(st.hide_spurs);
 
 	lo_bridge();
+	edge_flatten();
 	if (st.bins_left != 0 && st.bins_post) {
 		send_bins(psd, norm, bursts, (unsigned int)segments);
 	}
 
-	/*
-	 * The automatic floor follows the pixels the analog filters pass: at 40 and 80 MS/s about
-	 * 18 MHz either side of the LO, the attenuated rest would pull it down and wash out the
-	 * middle.
-	 */
-	int in_a = 0, in_b = W;
-
-	if (st.rate != ESP_SDR_RATE_16MSPS) {
-		int64_t left_khz = st.view_khz - span_khz() / 2;
-
-		in_a = (int)CLAMP((lo_khz() - PASS_KHZ - left_khz) * W / span_khz(), 0, (int64_t)W - 1);
-		in_b = (int)CLAMP((lo_khz() + PASS_KHZ - left_khz) * W / span_khz() + 1, in_a + 1,
-				  (int64_t)W);
-	}
+	/* The automatic floor follows the pixels inside the analog filters: all of them now. */
+	int in_a = pass_a, in_b = pass_b;
 
 	/* Pixel edges in shifted bins (NFFT/2 is the LO). */
 	float bin_khz = (float)fs_khz() / (float)NFFT;

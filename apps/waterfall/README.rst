@@ -16,7 +16,8 @@ no MicroPython, no LVGL, no PSRAM (the Stamp-S3A has none).
 
 Each row is a Welch average of Hann-windowed 1024-point FFTs over one 4096-sample burst at
 16, 40 or 80 MS/s. The up and down keys step the screen's span through 1000, 640, 320, 160,
-80, 40, 16, 8, 4 and 2 MHz (40 and wider sweep, below): 16 and 8 MHz at 40 MS/s, 4 and 2 MHz at 16 MS/s
+80, 40, 16, 8, 4 and 2 MHz (80 and wider sweep, below): 40 MHz captures at 80 MS/s, 16 and 8 MHz
+at 40 MS/s, 4 and 2 MHz at 16 MS/s
 (each showing part of the capture). The radio's analog filters pass about +-10 MHz at 16 MS/s and,
 in the PHY's 40 MHz mode used at 40 and 80 MS/s, about +-18 MHz, so the outer parts of a wide
 view are attenuated. At 16 MS/s that is wider than the capture itself: whatever lies 8 to
@@ -31,8 +32,8 @@ instead of one, each taking its share of the peak hold's bursts (8 at 16 MHz, 1 
 Scrolling past the captured span retunes the radio, and the waterfall history is shifted and
 rescaled to stay lined up.
 
-The spans of 40 MHz and wider sweep: each row retunes across the view in steps of at most
-32 MHz (2 at 40 MHz, 3 at 80, 5 at 160, 32 for the whole 1000 MHz from 1800 to 2800), captures 4096 samples at
+The spans of 80 MHz and wider sweep: each row retunes across the view in steps of at most
+32 MHz (3 at 80 MHz, 5 at 160, 32 for the whole 1000 MHz from 1800 to 2800), captures 4096 samples at
 80 MS/s at each and keeps the middle of each step, inside the filters' passband, so the band
 plan shows at a glance (the band names fit). The library waits 3 ms after every retune by
 default; captures right after a 40 MHz hop matched settled ones with no wait at all
@@ -44,8 +45,8 @@ as elsewhere and the scroll speed falls smoothly with the width (rows a second):
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
 Span (MHz)  1000  640  320  160   80   40   16    8    4    2
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
-``P8``         6    9   15   21   23   25   25   49   85  115
-``P1``         6    9   15   29   50   64   99  112  113  116
+``P8``         6    9   15   21   23   23   25   49   85  115
+``P1``         6    9   15   29   50   52   99  112  113  116
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
 
 At 320 MHz and wider a step gets one burst, so short bursts are often missed there, and the
@@ -109,10 +110,13 @@ LO's own line is bridged over 120 kHz either side, and its skirt, a smooth bump 
 125 kHz falling to +1 dB at 500 kHz, is flattened the same way against the ring from 600 to
 1200 kHz out. After a retune the mask relearns over 40 rows; the last 24 tunings' masks are
 kept (their 64 strongest bins), so going back to one applies its mask at once. A real steady
-carrier is masked too: ``x`` turns the mask off. At 40 and
-80 MS/s the trace and waterfall are dimmed beyond about 18 MHz either side of it, where the
-analog filters cut reception off; the automatic colour floor follows only the part in between,
-so the attenuated edges do not pull it down and wash out the middle. Below come a 30 pixel spectrum trace and the
+carrier is masked too: ``x`` turns the mask off.
+
+The 40 MHz span stays one capture: swept in two halves, a burst that began or ended between
+them showed in only one, torn at the seam. Its edges reach past the analog filters' flat
++-18 MHz, -1.2 dB at 17 MHz from the LO and -2 at 19, which is put back (about 0.33 dB a MHz
+past 13), so it is flat within 0.4 dB. Every span now stays inside the filters, so nothing is
+dimmed. Below come a 30 pixel spectrum trace and the
 waterfall, newest row on top. A ``!`` after the frequency means the PLL reported the
 frequency outside its tuning window (``-ERANGE``).
 
@@ -215,7 +219,7 @@ Command               Action
 ``$screen on|off``    drawing; without it rows come up to 4 times faster
 ``$tune <kHz>``       the view centre (retunes as needed)
 ``$lo <MHz>``         the LO alone, the view staying put when it fits
-``$span <MHz>``       1000, 640, 320, 160, 80, 40 (swept), 16, 8, 4 or 2
+``$span <MHz>``       1000, 640, 320, 160, 80 (swept), 40, 16, 8, 4 or 2
 ``$gain <n|auto>``    fixed gain table index or AGC
 ``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
 ``$hide on|off``      the steady-line mask (display only)
