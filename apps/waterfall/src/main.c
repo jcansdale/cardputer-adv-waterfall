@@ -560,7 +560,6 @@ static const struct {
 #define TDD    RGB565(200, 120, 255)
 #define DECTC  RGB565(255, 100, 180)
 #define SAT    RGB565(170, 170, 170)
-#define ZIGBEE RGB565(170, 255, 0)
 struct band {
 	int lo_khz, hi_khz;
 	const char *name;
@@ -588,69 +587,40 @@ static const struct band *region_bands(void)
 }
 
 /*
- * The third label row (LABEL_H rows of @p buf, @p n pixels from @p left_khz over @p span_khz):
- * the band strips (rows 0 and 1) and names, the Zigbee/Thread channels 11 to 26 (2405 to
- * 2480 MHz, green ticks and numbers) and the QO-100 narrowband uplink (2400.05 to 2400.3).
- * Over the trace, so they stay visible.
+ * The bands in the Wi-Fi row (LABEL_H rows of @p buf, @p n pixels from @p left_khz over
+ * @p span_khz): a line through the middle of the text, broken around the name where the
+ * Wi-Fi numbers (@p taken) and the other names leave room. They never overlap 2.4 GHz Wi-Fi.
  */
 static void draw_bands(uint16_t *buf, unsigned int stride, unsigned int n, int left_khz,
-		       int span_khz)
+		       int span_khz, bool *taken)
 {
-	static bool used[W];
 	const struct band *b = region_bands();
 
-	memset(used, 0, sizeof(used));
-#define KHZ_X(khz) ((int)(((int64_t)(khz) - left_khz) * (int64_t)n / span_khz))
-	/* A label centred on x, if it fits and nothing is there yet. */
-#define LABEL(x, text, color)                                                                      \
-	do {                                                                                       \
-		int len_ = 6 * (int)strlen(text) - 1, lx_ = (x) - len_ / 2;                          \
-		bool free_ = lx_ >= 0 && lx_ + len_ < (int)n;                                        \
-		for (int i_ = MAX(lx_ - 1, 0); free_ && i_ <= MIN(lx_ + len_, (int)n - 1); i_++) {     \
-			free_ = !used[i_];                                                           \
-		}                                                                                  \
-		if (free_) {                                                                       \
-			draw_text_w(buf, stride, (unsigned int)lx_, 2, text, color);                 \
-			for (int i_ = lx_; i_ < lx_ + len_; i_++) {                                  \
-				used[i_] = true;                                                     \
-			}                                                                          \
-		}                                                                                  \
-	} while (0)
-
 	for (size_t i = 0; i < ARRAY_SIZE(bands_eu); i++) {
-		int a = MAX(KHZ_X(b[i].lo_khz), 0), z = MIN(KHZ_X(b[i].hi_khz), (int)n - 1);
+		int a = MAX((int)(((int64_t)b[i].lo_khz - left_khz) * n / span_khz), 0);
+		int z = MIN((int)(((int64_t)b[i].hi_khz - left_khz) * n / span_khz), (int)n - 1);
+		int len = 6 * (int)strlen(b[i].name) - 1, lx = (a + z) / 2 - len / 2;
+		bool free = len + 2 <= z - a + 1 && lx >= 1 && lx + len < (int)n - 1;
 
 		if (b[i].color == 0 || z < a) {
 			continue;
 		}
+		for (int x = MAX(lx - 1, 0); free && x <= MIN(lx + len, (int)n - 1); x++) {
+			free = !taken[x];
+		}
+		if (free) {
+			draw_text_w(buf, stride, (unsigned int)lx, 1, b[i].name, b[i].color);
+			for (int x = lx; x < lx + len; x++) {
+				taken[x] = true;
+			}
+		}
+		/* The line through the middle of the text row, broken around the name. */
 		for (int x = a; x <= z; x++) {
-			buf[x] = buf[stride + (unsigned int)x] = b[i].color;
-		}
-		if (6 * (int)strlen(b[i].name) - 1 <= z - a + 1) {
-			LABEL((a + z) / 2, b[i].name, b[i].color);
+			if (!free || x < lx - 2 || x > lx + len + 1) {
+				buf[4U * stride + (unsigned int)x] = b[i].color;
+			}
 		}
 	}
-	for (int ch = 11; ch <= 26; ch++) {
-		int x = KHZ_X(2405000 + 5000 * (ch - 11));
-		char num[4];
-
-		if (x < 0 || x >= (int)n) {
-			continue;
-		}
-		buf[x] = buf[stride + (unsigned int)x] = ZIGBEE;
-		snprintf(num, sizeof(num), "%d", ch);
-		LABEL(x, num, ZIGBEE);
-	}
-	int qa = KHZ_X(2400050), qz = KHZ_X(2400300);
-
-	if (qz >= 0 && qa < (int)n) {
-		for (int x = MAX(qa, 0); x <= MIN(qz, (int)n - 1); x++) {
-			buf[x] = buf[stride + (unsigned int)x] = RGB565(255, 255, 255);
-		}
-		LABEL((MAX(qa, 0) + MIN(qz, (int)n - 1)) / 2, "QO", RGB565(255, 255, 255));
-	}
-#undef LABEL
-#undef KHZ_X
 }
 
 static int chan_khz(int ch)
@@ -688,7 +658,7 @@ static void build_overlay(void)
 			ble_at[x] = ble_adv[i].ch;
 		}
 	}
-	for (int ch = 1; ch <= 14; ch++) {
+	for (int ch = 1; ch <= 12; ch++) { /* 13 and 14: not labelled */
 		int x = (int)(((int64_t)chan_khz(ch) - left) * W / span);
 
 		if (x >= 0 && x < (int)W) {
@@ -752,8 +722,10 @@ static void draw_trace(void)
 			}
 		}
 		if (y0 == 0) {
+			static bool taken[W];
 			int next = 0; /* the first free pixel for a label */
 
+			memset(taken, 0, sizeof(taken));
 			for (unsigned int x = 0; x < W; x++) {
 				char num[4];
 				int lx;
@@ -768,10 +740,11 @@ static void draw_trace(void)
 				}
 				draw_text(fb, (unsigned int)lx, 1, num, RGB565(255, 220, 0));
 				next = lx + 6 * (int)strlen(num) + 1;
+				for (int i = lx; i < next - 1; i++) {
+					taken[i] = true;
+				}
 			}
-		}
-		if (y0 == 2U * LABEL_H) {
-			draw_bands(fb, W, W, st.view_khz - span_khz() / 2, span_khz());
+			draw_bands(fb, W, W, st.view_khz - span_khz() / 2, span_khz(), taken);
 		}
 		if (y0 == LABEL_H) {
 			for (unsigned int x = 0; x < W; x++) {
@@ -804,7 +777,7 @@ static void draw_help(void)
 		"X      MASK STEADY LINES (LEARNED)",
 		"V      AUTO-ROTATE (HOLD UPRIGHT)",
 		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
-		"YELLOW WI-FI  CYAN BLE  GREEN ZIGBEE",
+		"YELLOW WI-FI 1-12  CYAN BLUETOOTH LE",
 		"ORANGE MAST  BLUE PHONE  VIOLET TDD",
 	};
 	uint16_t bg = RGB565(16, 16, 40);
@@ -1018,13 +991,14 @@ static void side_row(const uint8_t *src, unsigned int n, unsigned int x)
 static void side_trace(void)
 {
 	static uint8_t wifi[PH], ble[PH]; /* the channel centred there, 0: none */
-	static bool ble_d[PH];
+	static bool ble_d[PH], taken[PH];
 	int next = 0;
 
 	memset(wifi, 0, sizeof(wifi));
 	memset(ble, 0, sizeof(ble));
 	memset(ble_d, 0, sizeof(ble_d));
-	for (int ch = 1; ch <= 14; ch++) {
+	memset(taken, 0, sizeof(taken));
+	for (int ch = 1; ch <= 12; ch++) {
 		int u = side_u(chan_khz(ch));
 
 		if (u >= 0 && u < (int)PH) {
@@ -1091,6 +1065,9 @@ static void side_trace(void)
 		if (lu >= next && lu >= 0 && lu + 6 * len <= (int)PH) {
 			draw_text_w(pbuf, PH, (unsigned int)lu, 1, num, RGB565(255, 220, 0));
 			next = lu + 6 * len + 1;
+			for (int i = lu; i < next - 1; i++) {
+				taken[i] = true;
+			}
 		}
 	}
 	for (unsigned int u = 0; u < PH; u++) {
@@ -1102,7 +1079,7 @@ static void side_trace(void)
 				    LABEL_H + 1U, name, BLE_COLOR);
 		}
 	}
-	draw_bands(&pbuf[2U * LABEL_H * PH], PH, PH, st.view_khz - span_khz() / 2, span_khz());
+	draw_bands(pbuf, PH, PH, st.view_khz - span_khz() / 2, span_khz(), taken);
 	blit_strip(P_TRACE_Y, P_TRACE_H);
 }
 

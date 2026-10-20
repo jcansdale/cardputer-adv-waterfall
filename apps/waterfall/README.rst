@@ -129,7 +129,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``v``   automatic portrait layout when held upright on / off
 ======  ===========================================
 
-Wi-Fi channels 1 to 14 are always labelled at the top of the spectrum trace, each number
+Wi-Fi channels 1 to 12 are always labelled at the top of the spectrum trace, each number
 centred over a short tick at the channel centre (labels that would collide are skipped).
 Below them, the Bluetooth LE advertising channels are labelled ``B37``, ``B38`` and ``B39``
 in cyan (2402, 2426 and 2480 MHz), where BLE devices announce themselves in short bursts; small
@@ -138,11 +138,10 @@ which connected devices hop between. The
 overlay adds dotted lines through the trace and waterfall (cyan for Bluetooth) and tints the
 20 MHz of the non-overlapping Wi-Fi channels 1, 6 and 11 in the trace.
 
-A third row marks the other services in the tuning range, each as a coloured strip with its
-name where it fits: orange where masts transmit, blue where phones do, violet where both take
-turns (TDD), pink DECT, grey satellites. Green ticks and numbers are the Zigbee/Thread channels
-11 to 26 (2405 to 2480 MHz), white ``QO`` the QO-100 satellite's narrowband uplink (2400.05 to
-2400.3 MHz). The number keys jump to the bands' centres, in order:
+The same row marks the other services in the tuning range, which never overlap 2.4 GHz Wi-Fi:
+each band is a coloured line through the middle of the row, broken around its name where it
+fits, orange where masts transmit, blue where phones do, violet where both take turns (TDD),
+pink DECT, grey satellites. The number keys jump to the bands' centres, in order:
 
 ===  ==================================  ==================================
 Key  Europe/UK (default)                 US (``$region us``)
@@ -192,7 +191,7 @@ Command               Action
 ``$gain <n|auto>``    fixed gain table index or AGC
 ``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
 ``$hide on|off``      the steady-line mask (display only)
-``$region eu|us``     which band table labels the third row and the number keys
+``$region eu|us``     which band table labels the bands and the number keys
 ``$post on|off``      ``$bins`` frames after the mask, as drawn, instead of before it
 ``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
                       ``right`` (that edge down, portrait)
