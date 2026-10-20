@@ -115,8 +115,8 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``.``   wider span, up to 80 MHz (down arrow)
 ``h``   back to 2440 MHz, 16 MHz span
 ``1``   to ``9`` and ``0``: jump to a band (table below)
-``-``   colour floor -2 dB (manual)
-``=``   colour floor +2 dB (manual)
+``-``   darker: colour floor +2 dB (manual)
+``=``   brighter (``+``): colour floor -2 dB (manual)
 ``[``   colour range -5 dB
 ``]``   colour range +5 dB
 ``a``   automatic colour floor on / off

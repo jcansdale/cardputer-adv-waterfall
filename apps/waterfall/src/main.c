@@ -14,7 +14,7 @@
  *   h     back to 2440 MHz, 16 MHz span
  *   w     Wi-Fi channel overlay on/off
  *   p     bursts per row (peak hold): 8 4 2 1 32 16, faster to the right, then slower
- *   - =   colour floor -2 / +2 dB    [ ]   colour range -5 / +5 dB
+ *   - =   darker / brighter (floor +2 / -2 dB)    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  *   x     mask the receiver's own steady lines on/off (learned, mask_update())
  *   v     auto-rotate on/off: held upright, the portrait layout, scrolled by the panel
@@ -780,7 +780,7 @@ static void draw_help(void)
 		";  .   SPAN 80-2 MHZ (UP/DOWN)",
 		"H  HOME     1-9 0  JUMP TO BANDS",
 		"N  M   GAIN -/+       G  AGC",
-		"-  =   COLOUR FLOOR   A  AUTO",
+		"-  =   DARKER/BRIGHTER  A  AUTO",
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
 		"X      MASK STEADY LINES (LEARNED)",
@@ -1445,13 +1445,13 @@ static void handle_key(char k)
 		/* Halve: faster, steadier rows lost; from 1 back to the slowest. */
 		st.peak = st.peak > 1 ? st.peak / 2 : PEAK_MAX;
 		return;
-	case '-':
-		st.auto_floor = false;
-		st.floor_db -= 2.0f;
-		return;
-	case '=':
+	case '-': /* darker: the floor up */
 		st.auto_floor = false;
 		st.floor_db += 2.0f;
+		return;
+	case '=': /* brighter (+): the floor down */
+		st.auto_floor = false;
+		st.floor_db -= 2.0f;
 		return;
 	case '[':
 		st.range_db = MAX(st.range_db - 5.0f, 10.0f);
