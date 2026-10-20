@@ -571,7 +571,7 @@ static const struct band bands_eu[] = {
 	{1920000, 1980000, "4G PHONE", PHONE, "B1 UL"}, {2110000, 2170000, "4G MAST", MAST, "B1 DL"},
 	{2300000, 2400000, "4G/5G", TDD, "B40"},        {2400000, 2483500, "ISM", 0},
 	{2483500, 2500000, "GSTAR", SAT},               {2500000, 2570000, "4G PHONE", PHONE, "B7 UL"},
-	{2570000, 2620000, "B38", TDD},                 {2620000, 2690000, "4G MAST", MAST, "B7 DL"},
+	{2570000, 2620000, "4G/5G", TDD, "B38"},                 {2620000, 2690000, "4G MAST", MAST, "B7 DL"},
 };
 static const struct band bands_us[] = {
 	{1850000, 1915000, "4G PHONE", PHONE, "B25 UL"}, {1920000, 1930000, "DECT6", DECTC},
