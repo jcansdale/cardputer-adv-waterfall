@@ -255,6 +255,7 @@ Command               Action
 ``$flat on|off``      the receiver's shape divided out (display only)
 ``$region eu|us``     which band table labels the bands and the number keys
 ``$post on|off``      ``$bins`` frames after the mask, as drawn, instead of before it
+``$shot``             the screen as drawn, as frames (``wf_serial.py shot``)
 ``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
                       ``right`` (that edge down, portrait)
 ====================  ===========================================================
@@ -277,6 +278,19 @@ the LO in bin 512. I/Q samples are int16 pairs in raw units (-512 to 511).
    tools/wf_serial.py iq -n 4 -o iq.npz
    tools/wf_serial.py --setup '$lo 2443' lines        # steady narrow lines, e.g. the spurs
    tools/wf_serial.py live                            # waterfall in a window
+
+``shot`` saves the screen as drawn, for documentation:
+
+.. code-block:: console
+
+   tools/wf_serial.py shot -o screen.png             # 3 times larger by default
+   tools/wf_serial.py --setup '$rotate left' shot -o portrait.png --scale 2
+
+The display can't be read back, so ``$shot`` makes the app redraw everything once with each
+display write also sent as a frame (``R``: x, y, width, height, then the big-endian RGB565
+pixels), then the layout (``S``: the panel offset, orientation and the hardware scroll's
+state, ``struct shot_info``); the tool puts them together, undoes the portrait scrolling and
+turns the image upright. The help screen, when open, is what it saves.
 
 Captures pause the screen unless ``--keep-screen`` is given. The tool opens the port with DTR
 and RTS raised: the USB Serial/JTAG resets the chip on RTS without DTR, which a plain open with

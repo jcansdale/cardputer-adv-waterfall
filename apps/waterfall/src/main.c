@@ -162,6 +162,8 @@ static bool use_dsp;
 static bool mask_fresh = true; /* relearn the steady-line mask (mask_update()) */
 static void mask_retune(int lo, int rate);
 static void flat_set(bool on);
+static void shot_rect(unsigned int x, unsigned int y, unsigned int w, unsigned int h,
+		      const uint16_t *buf);
 static float window_gain;
 
 static float row_db[W], trace_db[W];
@@ -184,6 +186,7 @@ static struct {
 	int peak; /* bursts per row, their per-bin maximum (1: one burst's average) */
 	bool hide_spurs; /* the steady-line mask (mask_update()) */
 	bool width_filter; /* instead: narrow lines clipped, blind (width_filter()) */
+	bool shot_req, shot; /* $shot: the next redraw also goes to the host (shot_rect()) */
 	bool flat; /* the receiver's shape divided out (flat_apply()) */
 	enum esp_sdr_rate rate;
 	int gain; /* ESP_SDR_RX_GAIN_AUTO or a table index */
@@ -290,6 +293,9 @@ static void blit(unsigned int y, unsigned int rows)
 	};
 
 	display_write(display, 0, y, &desc, fb);
+	if (st.shot) {
+		shot_rect(0, y, W, rows, fb);
+	}
 }
 
 static void build_palette(void)
@@ -829,7 +835,7 @@ static void draw_help(void)
 		"-  =   DARKER/BRIGHTER  A  AUTO",
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
-		"X  LINES: WIDTH/MASK/OFF F  FLAT",
+		"X      LINES: W/X/OFF  F  FLAT",
 		"V      AUTO-ROTATE (HOLD UPRIGHT)",
 		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
 		"YELLOW WI-FI 1-12  CYAN BLUETOOTH LE",
@@ -989,6 +995,9 @@ static void blit_rect(unsigned int x, unsigned int y, unsigned int w, unsigned i
 	};
 
 	display_write(display, x, y, &desc, buf);
+	if (st.shot) {
+		shot_rect(x, y, w, h, buf);
+	}
 }
 
 /* pbuf, rows v0 to v0 + n - 1 of the portrait screen, onto the panel. */
@@ -1640,6 +1649,8 @@ BUILD_ASSERT(sizeof(struct frame_hdr) == 32);
 
 #define FRAME_BINS    'B' /* int16 centi-dBFS per bin, from -fs/2 up (the LO at count/2) */
 #define FRAME_IQ      'I' /* int16 I, int16 Q per sample, raw units (-512 to 511) */
+#define FRAME_RECT    'R' /* $shot: uint16 x, y, w, h, then the RGB565 pixels as drawn (big endian) */
+#define FRAME_SHOT    'S' /* $shot done: struct shot_info */
 #define FRAME_VERSION 1U
 #define FRAME_STALL_MS 200U
 
@@ -1724,6 +1735,48 @@ static void frame_end(void)
 	uint32_t crc = sys_cpu_to_le32(frame_crc);
 
 	frame_write(&crc, sizeof(crc));
+}
+
+/*
+ * $shot: a redraw of everything goes to the host as well, each display write as a FRAME_RECT
+ * in the panel's coordinates, then a FRAME_SHOT with what the host needs to show them as the
+ * screen does: the display reads frame memory line PANEL_X0 + x for column x, except that with
+ * hardware scrolling on (portrait), line tfa + i of the scroll area shows memory line
+ * tfa + (vsp - tfa + i) % vsa.
+ */
+struct shot_info {
+	uint16_t width, height, panel_x0, orient;
+	uint16_t scroll_on, tfa, vsa, vsp;
+} __packed;
+
+static void shot_rect(unsigned int x, unsigned int y, unsigned int w, unsigned int h,
+		      const uint16_t *buf)
+{
+	uint16_t r[4] = {sys_cpu_to_le16(x), sys_cpu_to_le16(y), sys_cpu_to_le16(w),
+			 sys_cpu_to_le16(h)};
+
+	frame_begin(FRAME_RECT, 0U, sizeof(r) + w * h * 2U, 0U, 0U);
+	frame_write(r, sizeof(r));
+	frame_write(buf, w * h * 2U);
+	frame_end();
+}
+
+static void shot_end(void)
+{
+	struct shot_info i = {
+		.width = sys_cpu_to_le16(W),
+		.height = sys_cpu_to_le16(H),
+		.panel_x0 = sys_cpu_to_le16(PANEL_X0),
+		.orient = sys_cpu_to_le16(st.help ? ORIENT_LANDSCAPE : st.orient),
+		.scroll_on = sys_cpu_to_le16(scroll_on),
+		.tfa = sys_cpu_to_le16(scroll_on_tfa),
+		.vsa = sys_cpu_to_le16(SIDE_COLS),
+		.vsp = sys_cpu_to_le16(scroll_on_tfa + scroll_off),
+	};
+
+	frame_begin(FRAME_SHOT, 0U, sizeof(i), 0U, 0U);
+	frame_write(&i, sizeof(i));
+	frame_end();
 }
 
 /* A burst's raw I/Q as a frame. */
@@ -2551,7 +2604,7 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], post on|off, iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
-		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|width|off, width <kHz> [dB], flat on|off, region eu|us\n");
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|width|off, width <kHz> [dB], shot, flat on|off, region eu|us\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
 	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
@@ -2652,6 +2705,10 @@ static void handle_cmd(char *line)
 		width_db = CLAMP(db, 1.0f, 20.0f);
 		con_printf("ok width %d %d.%d\n", width_khz, (int)width_db,
 			   (int)(10.0f * width_db) % 10);
+	} else if (strcmp(line, "shot") == 0) {
+		/* The screen as drawn, at the next redraw (shot_end()). */
+		st.shot_req = st.screen;
+		con_printf(st.screen ? "ok shot\n" : "err shot screen paused\n");
 	} else if (strcmp(line, "hide") == 0 && strcmp(arg, "width") == 0) {
 		st.hide_spurs = false;
 		st.width_filter = true;
@@ -2771,6 +2828,26 @@ int main(void)
 		loop_ms = now;
 		bool draw = input || now - last_draw_ms >= FRAME_MS;
 
+		if (st.shot_req && st.screen) {
+			/* Everything redrawn, each write also to the host, then the layout. */
+			st.shot_req = false;
+			st.shot = true;
+			if (st.help) {
+				scroll_stop();
+				draw_help();
+			} else if (st.orient != ORIENT_LANDSCAPE) {
+				side_full();
+			} else {
+				scroll_stop();
+				draw_header();
+				draw_scale();
+				draw_trace();
+				draw_waterfall();
+			}
+			st.shot = false;
+			shot_end();
+			draw = false;
+		}
 		if (draw) {
 			last_draw_ms = now;
 		}

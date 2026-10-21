@@ -89,3 +89,29 @@ def test_bins_db_and_freqs():
     db = wf.bins_db(f)
     assert np.isnan(db[0]) and list(db[1:]) == pytest.approx([-50.0, 0.0, 12.34])
     assert list(wf.freqs_mhz(f)) == pytest.approx([2432.0, 2436.0, 2440.0, 2444.0])
+
+
+def rgb565(r, g, b):
+    return struct.pack(">H", ((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3))
+
+
+def test_shot_image_landscape():
+    red, blue = rgb565(255, 0, 0), rgb565(0, 0, 255)
+    rects = [(0, 0, 4, 2, blue * 8), (1, 1, 2, 1, red * 2)]
+    img = wf.shot_image(rects, (4, 2, 40, 0, 0, 0, 0, 0))
+    assert img.shape == (2, 4, 3)
+    assert tuple(img[0, 0]) == (0, 0, 255)
+    assert tuple(img[1, 1]) == (255, 0, 0) and tuple(img[1, 2]) == (255, 0, 0)
+    assert tuple(img[1, 3]) == (0, 0, 255)
+
+
+def test_shot_image_scroll_and_rotation():
+    # 6 columns, the scroll area columns 2 to 5 (memory lines 42 to 45), scrolled by 1
+    cols = [rgb565(v * 40, 0, 0) for v in range(6)]
+    rects = [(x, 0, 1, 1, cols[x]) for x in range(6)]
+    img = wf.shot_image(rects, (6, 1, 40, 0, 1, 42, 4, 43))
+    reds = [int(img[0, x, 0]) // 40 for x in range(6)]
+    assert reds == [0, 1, 3, 4, 5, 2]
+    left = wf.shot_image(rects, (6, 1, 40, wf.ORIENT_LEFT_DOWN, 0, 0, 0, 0))
+    assert left.shape == (6, 1, 3)
+    assert int(left[0, 0, 0]) // 40 == 5  # the panel's right edge on top

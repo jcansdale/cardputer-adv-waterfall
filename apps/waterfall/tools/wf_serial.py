@@ -18,6 +18,7 @@ Usage: wf_serial.py [--port P] [--setup LINE]... <command> ...
   lines [-n N] [--db D]        steady narrow lines: bins D dB above their neighbours'
                                median in most rows, with their frequency and level
   live                         a live waterfall in a matplotlib window
+  shot -o F.png [--scale N]    the screen as drawn, upright, N times larger (default 3)
 
 --setup sends console lines first, e.g.
   wf_serial.py --setup '$span 2' --setup '$tune 2448000' lines
@@ -38,6 +39,9 @@ import zlib
 MAGIC = b"ESDR"
 HDR = struct.Struct("<BBHIIiIhBBI")  # after the magic
 FRAME_BINS, FRAME_IQ = ord("B"), ord("I")
+FRAME_RECT, FRAME_SHOT = ord("R"), ord("S")
+SHOT_INFO = struct.Struct("<8H")  # struct shot_info
+ORIENT_LEFT_DOWN, ORIENT_RIGHT_DOWN = 1, 2
 FULL_SCALE = 512.0
 MAX_PAYLOAD = 1 << 20
 
@@ -342,6 +346,57 @@ def cmd_live(link, args):
         plt.pause(0.01)
 
 
+def shot_image(rects, info):
+    """The screen as the viewer sees it, (rows, columns, 3) uint8, from $shot's frames.
+
+    @p rects: (x, y, w, h, big-endian RGB565 bytes) display writes, in order; @p info:
+    struct shot_info's fields. The display reads frame memory line panel_x0 + x for column x,
+    except that inside the scroll area (portrait) line tfa + i shows tfa + (vsp - tfa + i) % vsa.
+    """
+    import numpy as np
+    width, height, x0, orient, scroll_on, tfa, vsa, vsp = info
+    mem = np.zeros((x0 + width + vsa + 1, height), np.uint16)  # [memory line, y]
+    for x, y, w, h, px in rects:
+        mem[x0 + x:x0 + x + w, y:y + h] = np.frombuffer(px, ">u2").reshape(h, w).T
+    lines = x0 + np.arange(width)
+    if scroll_on:
+        inside = (lines >= tfa) & (lines < tfa + vsa)
+        lines = np.where(inside, tfa + (vsp - tfa + lines - tfa) % vsa, lines)
+    v = mem[lines].T.astype(np.uint32)  # [y, x]
+    rgb = np.stack([(v >> 11) & 31, (v >> 5) & 63, v & 31], axis=-1)
+    rgb = (rgb * 255 // np.array([31, 63, 31])).astype(np.uint8)
+    if orient == ORIENT_LEFT_DOWN:  # the panel's right edge on top
+        rgb = np.rot90(rgb, 1)
+    elif orient == ORIENT_RIGHT_DOWN:
+        rgb = np.rot90(rgb, -1)
+    return np.ascontiguousarray(rgb)
+
+
+def cmd_shot(link, args):
+    import numpy as np
+    reply = link.command("$shot")
+    if not reply.startswith("ok"):
+        sys.exit(reply)
+    rects, end = [], time.time() + 15
+    while time.time() < end:
+        for kind, v in link.events(0.2):
+            if kind != "frame":
+                continue
+            if v.type == FRAME_RECT:
+                x, y, w, h = struct.unpack_from("<4H", v.payload)
+                rects.append((x, y, w, h, v.payload[8:]))
+            elif v.type == FRAME_SHOT:
+                img = shot_image(rects, SHOT_INFO.unpack(v.payload))
+                img = np.repeat(np.repeat(img, args.scale, axis=0), args.scale, axis=1)
+                import matplotlib
+                matplotlib.use("Agg")
+                import matplotlib.image
+                matplotlib.image.imsave(args.o, img)
+                print(f"saved {args.o}: {img.shape[1]}x{img.shape[0]}, {len(rects)} writes")
+                return
+    sys.exit(f"no complete screenshot ({len(rects)} writes, {link.bad} bad frames)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -369,6 +424,9 @@ def main():
     p.add_argument("--frac", type=float, default=0.8, help="of rows (default 0.8)")
     p = sub.add_parser("live")
     p.add_argument("--rows", type=int, default=300)
+    p = sub.add_parser("shot")
+    p.add_argument("-o", required=True, help="the image (.png)")
+    p.add_argument("--scale", type=int, default=3, help="pixels per screen pixel (default 3)")
     args = ap.parse_args()
 
     link = Link(args.port or find_port(), args.verbose)
