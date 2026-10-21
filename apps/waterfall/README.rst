@@ -46,8 +46,8 @@ as elsewhere and the scroll speed falls smoothly with the width (rows a second):
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
 Span (MHz)  1000  640  320  160   80   40   16    8    4    2
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
-``P8``         5    8   13   16   21   23   25   49   85  115
-``P1``         5    8   13   25   39   52   99  112  113  116
+``P8``         4    7   12   15   18   22   21   41   68  109
+``P1``         4    7   12   19   25   37   37   62   84  109
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
 
 At 320 MHz and wider a step gets one burst, so short bursts are often missed there. The steady-line mask is off while sweeping; ``x``
@@ -63,18 +63,19 @@ both. ``$settle``
 changes the wait after each retune, for experiments.
 
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
-FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. A redraw takes
-about 25 ms (the display runs at 40 MHz SPI), so rows are captured until a frame is due, at
-most 15 a second, and the screen then scrolls by all of them at once; a key press redraws at
-once. At 16 MHz that is about 23 rows a second with peak hold (``P8``) and 57 with one burst a
-row (``P1``); the table under ``p`` has the rest.
+FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. The display
+runs at 80 MHz SPI (above the ST7789's rated 62.5 MHz writes, but clean here), so a whole
+redraw takes about 6.5 ms, and landscape redraws after every row: redrawn at a frame rate, the
+waterfall stepped by one row or two at a time, unevenly, which shimmered. At 16 MHz that is
+about 21 rows a second with peak hold (``P8``) and 37 with one burst a row (``P1``); the table
+under ``p`` has the rest.
 
 Held upright (either edge down, past about 60 degrees; back to landscape within about 30 degrees
 of upright, so it does not flip back and forth), the BMI270 accelerometer switches to a portrait
 layout laid out as the landscape one: the settings on two lines, the scale, and the trace with
 the Wi-Fi and Bluetooth LE labels on top, the waterfall under them with the newest row at the
 top. The panel scrolls the waterfall in hardware, so a new row costs one 135-pixel column
-instead of a redraw: about 29 rows a second at ``P8`` and 80 at ``P1``, against 23 and 57 in
+instead of a redraw: about 35 rows a second at ``P8`` and 128 at ``P1``, against 21 and 37 in
 landscape. The arrow keys follow the
 rotation (left and right still scroll, up and down still step the span as seen on the screen);
 ``v`` turns the automatic rotation off and on. The key list stays in landscape.
@@ -84,13 +85,13 @@ each row is the per-bin maximum over 8 bursts (peak hold, ``P8`` in the header).
 the speed: each press halves the bursts per row, 8, 4, 2, 1 (one burst's plain average), then
 wraps round to the slow end, 32 and 16. Fewer bursts scroll faster but miss more of short
 bursts; 16 and 32 catch more and hold more seconds of history. Rows a second at 16 MHz, in
-landscape (portrait is a little faster):
+landscape (portrait is faster, the waterfall scrolling in hardware):
 
 ==========  ===  ===  ===  ===  ===  ===
 Bursts       32   16    8    4    2    1
 ==========  ===  ===  ===  ===  ===  ===
-Landscape     8   13   23   36   44   57
-Portrait      9   17   29   44   62   80
+Landscape     8   14   21   28   33   37
+Portrait     10   19   35   59   93  128
 ==========  ===  ===  ===  ===  ===  ===
 
 The top line shows the view's centre frequency, span, gain and colour scale; under
@@ -144,6 +145,8 @@ them showed in only one, torn at the seam. Every span now stays inside the filte
 is dimmed. The display refreshes at 119 Hz, twice its default: with no tearing-effect line wired to
 time writes against, the panel's scan crosses what is being drawn in most frames, which at
 60 Hz showed as a shimmer over the waterfall and trace; at 119 Hz it is gone in portrait.
+Landscape's shimmer was mostly the uneven steps of a redraw at a frame rate (above); it is
+redrawn after every row now.
 Below come a 30 pixel spectrum trace and the
 waterfall, newest row on top. A ``!`` after the frequency means the PLL reported the
 frequency outside its tuning window (``-ERANGE``).

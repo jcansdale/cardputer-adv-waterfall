@@ -90,8 +90,10 @@ SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
 #define SAMPLES   4096U
 
 /*
- * A redraw takes about 25 ms, two captures' worth: rows are captured until a frame is due and
- * the screen then scrolls by all of them at once. Input redraws at once.
+ * Landscape redraws after every row (or zoom rows): at a frame rate the waterfall stepped by
+ * one row or two at a time, unevenly, which shimmered; a whole redraw is about 6.5 ms at
+ * 80 MHz SPI. The parts portrait redraws (settings, trace) follow at FRAME_MS. Input redraws
+ * at once.
  */
 #define FRAME_MS 66U
 
@@ -2839,7 +2841,7 @@ int main(void)
 
 		loop_max_ms = MAX(loop_max_ms, now - loop_ms);
 		loop_ms = now;
-		bool draw = input || now - last_draw_ms >= FRAME_MS;
+		bool draw = input || st.orient == ORIENT_LANDSCAPE || now - last_draw_ms >= FRAME_MS;
 
 		if (st.shot_req && st.screen) {
 			/* Everything redrawn, each write also to the host, then the layout. */

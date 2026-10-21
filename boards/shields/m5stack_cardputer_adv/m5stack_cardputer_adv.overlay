@@ -33,7 +33,10 @@
 		st7789v: st7789v@0 {
 			compatible = "sitronix,st7789v";
 			reg = <0>;
-			mipi-max-frequency = <DT_FREQ_M(40)>;
+			/* Above the ST7789's rated 62.5 MHz writes, but clean here, and half the time
+			 * of 40 for the redraw after every landscape row.
+			 */
+			mipi-max-frequency = <DT_FREQ_M(80)>;
 			mipi-mode = "MIPI_DBI_MODE_SPI_4WIRE";
 			width = <240>;
 			height = <135>;
