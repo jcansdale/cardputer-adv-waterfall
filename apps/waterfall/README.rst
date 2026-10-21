@@ -49,10 +49,11 @@ Span (MHz)  1000  640  320  160   80   40   16    8    4    2
 ``P1``         6    9   15   29   50   52   99  112  113  116
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
 
-At 320 MHz and wider a step gets one burst, so short bursts are often missed there, and the
-steps show as a faint 1 to 2 dB ripple. The steady-line mask is off while sweeping; ``x``
+At 320 MHz and wider a step gets one burst, so short bursts are often missed there. The steady-line mask is off while sweeping; ``x``
 patches the clock harmonics and each step's LO spurs instead, including those the receiver
-makes when tuned below about 1842 MHz (up to +14 dB, 2.5 to 3.3 MHz below the LO). ``$settle``
+makes when tuned below about 1842 MHz (a cluster up to +13 dB and 1 MHz wide wandering
+between 2.3 and 3.6 MHz below the LO, bridged as a whole, and weaker ones about 5.4, 8.5 and
+11.1 MHz below). ``$settle``
 changes the wait after each retune, for experiments.
 
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C

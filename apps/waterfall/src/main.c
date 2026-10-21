@@ -2124,6 +2124,24 @@ static void patch_bins(int k)
 	}
 }
 
+/* Bins @p a to @p b about the LO bridged straight from the mean of three beyond each end. */
+static void bridge_bins(int a, int b)
+{
+	if (a < -(int)NFFT / 2 + 4 || b > (int)NFFT / 2 - 4) {
+		return;
+	}
+	float l = 0.0f, r = 0.0f;
+
+	for (int j = 1; j <= 3; j++) {
+		l += psd[(unsigned int)(a - j + (int)NFFT) % NFFT];
+		r += psd[(unsigned int)(b + j + (int)NFFT) % NFFT];
+	}
+	for (int k = a; k <= b; k++) {
+		psd[(unsigned int)(k + (int)NFFT) % NFFT] =
+			(l + (r - l) * (float)(k - a + 1) / (float)(b - a + 2)) / 3.0f;
+	}
+}
+
 /*
  * x while sweeping, in place of the mask (it learns per tuning, too slowly for a sweep): the
  * board's clock harmonics and the spur riding on this step's LO patched over.
@@ -2138,15 +2156,18 @@ static void sweep_patch(int lo)
 	patch_bins((int)lroundf((float)(lo_spur_khz(lo) - lo) * (float)NFFT / (float)fs_khz()));
 
 	/*
-	 * Tuned below about 1842 MHz, the bottom of the range, the receiver makes more: up to
-	 * +14 dB between 3.3 and 2.5 MHz below the LO (drifting with it), and weaker ones 8.5 and
-	 * 11.1 MHz below. Measured at LOs from 1805 to 1844 MHz.
+	 * Tuned below about 1842 MHz, the bottom of the range, the receiver makes more: a cluster
+	 * up to +13 dB and up to 1 MHz wide wandering between 3.6 and 2.3 MHz below the LO, and
+	 * weaker ones about 5.4, 8.5 and 11.1 MHz below. Measured at LOs from 1800 to 1844 MHz;
+	 * bridged as whole ranges (spots at 3.3, 2.9 and 2.5 left its peak showing between them).
 	 */
 	if (lo < 1842000) {
-		static const int16_t ofs_khz[] = {-3300, -2900, -2500, -8520, -11090};
+		static const int16_t ofs_khz[][2] = {
+			{-3800, -2100}, {-5500, -5200}, {-8700, -8250}, {-11300, -10950}};
 
 		for (size_t i = 0; i < ARRAY_SIZE(ofs_khz); i++) {
-			patch_bins((int)lroundf((float)ofs_khz[i] * (float)NFFT / (float)fs_khz()));
+			bridge_bins((int)floorf((float)ofs_khz[i][0] * (float)NFFT / (float)fs_khz()),
+				    (int)ceilf((float)ofs_khz[i][1] * (float)NFFT / (float)fs_khz()));
 		}
 	}
 }
