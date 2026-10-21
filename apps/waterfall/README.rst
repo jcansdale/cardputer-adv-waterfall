@@ -250,7 +250,7 @@ Command               Action
 ``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
 ``$hide <how>``       ``on``: the steady-line mask, ``width``: the width filter,
                       ``off``: neither
-``$width <kHz> <dB>``  the width filter's widest line and threshold (600 4)
+``$width <k> <dB>``   the width filter's widest line (kHz) and threshold (600 4)
 ``$flat on|off``      the receiver's shape divided out (display only)
 ``$region eu|us``     which band table labels the bands and the number keys
 ``$post on|off``      ``$bins`` frames after the mask, as drawn, instead of before it
