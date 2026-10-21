@@ -11,10 +11,15 @@ table lists for each step's LO instead (x).
   spurs.py measure -o spurs.npz [--from 1800 --to 2800]
       raw bins (before any correction) at 80 MS/s at every whole-MHz LO: per bin the median
       and the 90th percentile over FRAMES captures; about 6 minutes for 1001 LOs
-  spurs.py header spurs.npz [-o src/spur_tables.h] [--png lines.png]
+  spurs.py header spurs.npz [more.npz ...] [-o src/spur_tables.h] [--png lines.png]
       the lines: bins standing above their neighbours in most captures (or strongly in a
       few), and not at one radio frequency over the neighbouring LOs (those are real signals
       or the clock harmonics, which stay put while the LO moves)
+
+Below about 1842 MHz the lines differ with how the chip started: one set after power-on,
+another (about 1.7 MHz higher) after a reset, flashing included, which leaves some of the radio's
+analog state behind. Measure both (replug, measure 1795-1860; reset, measure all) and merge
+them in one header; above 1842 MHz they agree to the bin.
 
 The table is this board's; measure another board's and rebuild.
 """
@@ -169,7 +174,7 @@ def main():
     p.add_argument("--to", dest="lo_to", type=int, default=2800)
     p.add_argument("-o", required=True, help=".npz")
     p = sub.add_parser("header")
-    p.add_argument("npz")
+    p.add_argument("npz", nargs="+", help="measurements, merged: each LO's lines in any")
     p.add_argument("-o", default="-", help="the header (default: stdout)")
     p.add_argument("--png")
     args = ap.parse_args()
@@ -199,8 +204,11 @@ def main():
         np.savez_compressed(args.o, **res)
         return
 
-    lines = find_lines(np.load(args.npz))
-    text = header(lines, args.npz.split("/")[-1])
+    lines = {}
+    for f in args.npz:
+        for lo, ks in find_lines(np.load(f)).items():
+            lines[lo] = sorted(set(lines.get(lo, [])) | set(ks))
+    text = header(lines, ", ".join(f.split("/")[-1] for f in args.npz))
     if args.o == "-":
         sys.stdout.write(text)
     else:

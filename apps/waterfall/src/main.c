@@ -2144,11 +2144,29 @@ static void bridge_bins(int a, int b)
 }
 
 /*
+ * The receiver's own lines at this LO, measured at 80 MS/s at every whole-MHz LO
+ * (tools/spurs.py, spur_tables.h): they move with the LO in ways no formula covers (a cluster
+ * 2.3 to 3.6 MHz below it under 1842 MHz, in one place after power-on and another after a
+ * reset; families at (LO - 2280) / 3 and (LO - 2520) / 3 from it; ...), and some come and go,
+ * which the learned mask lets through. Bridged.
+ */
+static void spur_bridge(int lo)
+{
+	int mhz = lo / 1000;
+
+	if (st.rate != ESP_SDR_RATE_80MSPS || lo % 1000 != 0 || mhz < SPUR_LO_MIN ||
+	    mhz > SPUR_LO_MAX) {
+		return;
+	}
+	for (int i = spur_idx[mhz - SPUR_LO_MIN]; i < spur_idx[mhz - SPUR_LO_MIN + 1]; i++) {
+		bridge_bins(spur_run[i][0], spur_run[i][1]);
+	}
+}
+
+/*
  * x while sweeping, in place of the mask (it learns per tuning, too slowly for a sweep): the
- * board's clock harmonics and the spur riding on this step's LO patched over, and the bins
- * spur_tables.h lists for this LO bridged: the receiver's other lines, which move with the LO
- * in ways no formula covers (a cluster 2.3 to 3.6 MHz below it under 1842 MHz, families at
- * (LO - 2280) / 3 and (LO - 2520) / 3 from it, ...), measured at every whole-MHz LO.
+ * board's clock harmonics and the spur riding on this step's LO patched over, and its other
+ * measured lines bridged (spur_bridge()).
  */
 static void sweep_patch(int lo)
 {
@@ -2159,14 +2177,7 @@ static void sweep_patch(int lo)
 	}
 	patch_bins((int)lroundf((float)(lo_spur_khz(lo) - lo) * (float)NFFT / (float)fs_khz()));
 
-	/* The receiver's own lines at this LO, measured (tools/spurs.py). */
-	int mhz = lo / 1000;
-
-	if (lo % 1000 == 0 && mhz >= SPUR_LO_MIN && mhz <= SPUR_LO_MAX) {
-		for (int i = spur_idx[mhz - SPUR_LO_MIN]; i < spur_idx[mhz - SPUR_LO_MIN + 1]; i++) {
-			bridge_bins(spur_run[i][0], spur_run[i][1]);
-		}
-	}
+	spur_bridge(lo);
 }
 
 #define SWEEP_STEP_KHZ 32000
@@ -2280,6 +2291,10 @@ static int capture_row(void)
 	}
 	/* The board's own steady lines, learned and divided out (mask_update()). */
 	mask_update(st.hide_spurs);
+	/* After the mask, like the LO's bridge: a smooth bridge would look like a line to it. */
+	if (st.hide_spurs) {
+		spur_bridge(lo_khz());
+	}
 
 	lo_bridge();
 	if (st.bins_left != 0 && st.bins_post) {

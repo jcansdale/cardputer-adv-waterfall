@@ -53,8 +53,11 @@ At 320 MHz and wider a step gets one burst, so short bursts are often missed the
 patches the clock harmonics and each step's LO spur instead, and bridges the receiver's other
 lines that move with the LO, measured at every whole-MHz LO (``src/spur_tables.h``,
 `Calibration`_): a cluster up to +13 dB and 1 MHz wide 2.3 to 3.6 MHz below the LO under
-1842 MHz, families at (LO - 2280) / 3 and (LO - 2520) / 3 from it, and others; about one
-short run of bins per LO on average. ``$settle``
+1842 MHz, families at (LO - 2280) / 3 and (LO - 2520) / 3 from it, and others; under one
+short run of bins per LO on average. The 40 MHz span (the same 80 MS/s capture) bridges them
+too, after the mask, which lets lines that come and go through. Under 1842 MHz the cluster
+sits in one place after power-on and about 1.7 MHz higher after a reset (flashing included):
+a reset leaves some of the radio's analog state behind. The table holds both. ``$settle``
 changes the wait after each retune, for experiments.
 
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
@@ -275,12 +278,13 @@ one (about 10 minutes, with the app running; it puts the settings back after):
    tools/flatfield.py measure -o cal2.npz            # a second pass halves the noise
    tools/flatfield.py header cal1.npz cal2.npz -o src/flat_tables.h --png shape.png
 
-and for the sweeps' spur list (about 5 minutes):
+and for the spur list (about 5 minutes, and a replug):
 
 .. code-block:: console
 
-   tools/spurs.py measure -o spurs.npz
-   tools/spurs.py header spurs.npz -o src/spur_tables.h --png lines.png
+   tools/spurs.py measure -o spurs.npz                          # after a reset
+   tools/spurs.py measure --from 1795 --to 1860 -o poweron.npz  # replugged
+   tools/spurs.py header spurs.npz poweron.npz -o src/spur_tables.h --png lines.png
 
 then rebuild and flash. ``spurs.py`` takes the raw bins at 80 MS/s at all 1001 whole-MHz LOs
 (the steps' LOs), the median and 90th percentile of 16 captures each, and keeps a bin standing

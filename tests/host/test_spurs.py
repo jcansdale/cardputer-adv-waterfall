@@ -41,3 +41,20 @@ def test_ranges_and_header():
     assert "#define SPUR_LO_MIN 1800" in text and "#define SPUR_LO_MAX 1802" in text
     assert "spur_idx[4] = {\n\t0, 1, 1, 2,\n};" in text
     assert "{-32, -27}, {3, 7}," in text
+
+
+def test_header_merges_measurements(tmp_path, run_main):
+    rng = np.random.default_rng(2)
+    los = list(range(1800, 1810))
+    files = []
+    for n, ofs in enumerate((-100, -120)):  # the same LOs, a line in another place
+        d = dataset(los, rng)
+        for i in range(len(los)):
+            add(d, i, ofs, 8)
+        files.append(tmp_path / f"m{n}.npz")
+        np.savez(files[-1], **d)
+    out = tmp_path / "spur_tables.h"
+    run_main(sp, "header", *files, "-o", out)
+    text = out.read_text()
+    assert "m0.npz, m1.npz" in text
+    assert "{-122, -118}, {-102, -98}," in text
