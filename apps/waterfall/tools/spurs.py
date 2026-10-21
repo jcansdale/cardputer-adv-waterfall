@@ -16,10 +16,10 @@ table lists for each step's LO instead (x).
       few), and not at one radio frequency over the neighbouring LOs (those are real signals
       or the clock harmonics, which stay put while the LO moves)
 
-Below about 1842 MHz the lines differ with how the chip started: one set after power-on,
-another (about 1.7 MHz higher) after a reset, flashing included, which leaves some of the radio's
-analog state behind. Measure both (replug, measure 1795-1860; reset, measure all) and merge
-them in one header; above 1842 MHz they agree to the bin.
+Below about 1842 MHz the lines sit in one of two places, about 1.7 MHz apart, depending on the
+boot: after a reset (flashing included) always the higher, after power-on usually the lower.
+Measure both (after a reset, measure all; replug until the other shows, measure 1795-1860) and
+merge them in one header; above 1842 MHz they agree to the bin.
 
 The table is this board's; measure another board's and rebuild.
 """

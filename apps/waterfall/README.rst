@@ -36,17 +36,18 @@ The spans of 80 MHz and wider sweep: each row retunes across the view in steps o
 32 MHz (3 at 80 MHz, 5 at 160, 32 for the whole 1000 MHz from 1800 to 2800), captures 4096 samples at
 80 MS/s at each and keeps the middle of each step, inside the filters' passband, so the band
 plan shows at a glance (the band names fit). The library waits 3 ms after every retune by
-default; captures right after a 40 MHz hop matched settled ones with no wait at all
-(passband within 0.15 dB, clock harmonics 0.5 dB, also across the 5/6 divider at 2210 MHz), so
-the app sets 200 us (``esp_sdr_set_retune_settle()``) and a retune takes about 1 ms. The P
+default; after a reset, captures right after a 40 MHz hop matched settled ones with no wait at
+all (passband within 0.15 dB, clock harmonics 0.5 dB), but after some power-ons the first 500 us or so
+make spurs up to +32 dB, smeared over several bins, so the app sets 1 ms
+(``esp_sdr_set_retune_settle()``). The P
 bursts of a row are shared out over the steps (at least one each), so a row is as much work
 as elsewhere and the scroll speed falls smoothly with the width (rows a second):
 
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
 Span (MHz)  1000  640  320  160   80   40   16    8    4    2
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
-``P8``         6    9   15   21   23   23   25   49   85  115
-``P1``         6    9   15   29   50   52   99  112  113  116
+``P8``         5    8   13   16   21   23   25   49   85  115
+``P1``         5    8   13   25   39   52   99  112  113  116
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
 
 At 320 MHz and wider a step gets one burst, so short bursts are often missed there. The steady-line mask is off while sweeping; ``x``
@@ -56,8 +57,9 @@ lines that move with the LO, measured at every whole-MHz LO (``src/spur_tables.h
 1842 MHz, families at (LO - 2280) / 3 and (LO - 2520) / 3 from it, and others; under one
 short run of bins per LO on average. The 40 MHz span (the same 80 MS/s capture) bridges them
 too, after the mask, which lets lines that come and go through. Under 1842 MHz the cluster
-sits in one place after power-on and about 1.7 MHz higher after a reset (flashing included):
-a reset leaves some of the radio's analog state behind. The table holds both. ``$settle``
+sits in one of two places, about 1.7 MHz apart, depending on the boot: after a reset (flashing
+included) always the higher, after power-on usually the lower (3 times in 4). The table holds
+both. ``$settle``
 changes the wait after each retune, for experiments.
 
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
@@ -116,11 +118,13 @@ kept (their 64 strongest bins), so going back to one applies its mask at once. A
 carrier is masked too: ``x`` turns the mask off.
 
 For comparison ``x``'s second setting (``W`` in the header) swaps all that for a blind width
-filter: in every row, a run of bins more than 5 dB above the mean of a ring of bins one to
+filter: in every row, a run of bins more than 4 dB above the mean of a ring of bins one to
 three widths out is cleared, with its skirts, to that mean when the run is no wider than
-300 kHz. It needs no learning or table and takes the receiver's lines that come and go too,
+600 kHz (``$width <kHz> [dB]`` to experiment; under 1842 MHz the receiver's spur cluster
+wanders over most of 1 MHz). It needs no learning or table and takes the receiver's lines that come and go too,
 but it also takes real narrow signals (NB-IoT and GSM carriers, 180 and 200 kHz, and
-anything narrower); Wi-Fi, Bluetooth and 4G are far wider and stay. A third press shows
+anything narrower); Wi-Fi, Bluetooth and 4G are wider and stay. In the sweeps it leaves no
+steady line at 80 and 160 MHz, as many as ``X``. A third press shows
 everything.
 
 Every capture also carries the receiver's own shape about the LO: the analog filters'
@@ -246,6 +250,7 @@ Command               Action
 ``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
 ``$hide <how>``       ``on``: the steady-line mask, ``width``: the width filter,
                       ``off``: neither
+``$width <kHz> <dB>``  the width filter's widest line and threshold (600 4)
 ``$flat on|off``      the receiver's shape divided out (display only)
 ``$region eu|us``     which band table labels the bands and the number keys
 ``$post on|off``      ``$bins`` frames after the mask, as drawn, instead of before it
@@ -288,7 +293,8 @@ one (about 10 minutes, with the app running; it puts the settings back after):
    tools/flatfield.py measure -o cal2.npz            # a second pass halves the noise
    tools/flatfield.py header cal1.npz cal2.npz -o src/flat_tables.h --png shape.png
 
-and for the spur list (about 5 minutes, and a replug):
+and for the spur list (about 5 minutes, and a replug or two until a boot shows the other
+pattern under 1842 MHz):
 
 .. code-block:: console
 

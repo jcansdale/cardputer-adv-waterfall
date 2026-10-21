@@ -2155,8 +2155,8 @@ static void bridge_bins(int a, int b)
 /*
  * The receiver's own lines at this LO, measured at 80 MS/s at every whole-MHz LO
  * (tools/spurs.py, spur_tables.h): they move with the LO in ways no formula covers (a cluster
- * 2.3 to 3.6 MHz below it under 1842 MHz, in one place after power-on and another after a
- * reset; families at (LO - 2280) / 3 and (LO - 2520) / 3 from it; ...), and some come and go,
+ * 2.3 to 3.6 MHz below it under 1842 MHz, in one of two places depending on the boot;
+ * families at (LO - 2280) / 3 and (LO - 2520) / 3 from it; ...), and some come and go,
  * which the learned mask lets through. Bridged.
  */
 static void spur_bridge(int lo)
@@ -2191,16 +2191,16 @@ static void sweep_patch(int lo)
 
 /*
  * The width filter (x's second setting, W), blind, to compare with the mask and the measured
- * spur list: a run of bins standing more than WIDTH_DB above the mean (in dB) of a ring one to
- * three widths out is a line when that core is no wider than WIDTH_KHZ; it and its skirts
- * (above WIDTH_SKIRT_DB, up to WIDTH_KHZ either side) are set to that mean. The receiver's
+ * spur list: a run of bins standing more than width_db above the mean (in dB) of a ring one to
+ * three widths out is a line when that core is no wider than width_khz; it and its skirts
+ * (above WIDTH_SKIRT_DB, up to width_khz either side) are set to that mean. The receiver's
  * spurs go, steady or not, but so do real narrow signals: NB-IoT and GSM carriers (180,
  * 200 kHz) and narrower. Wi-Fi, Bluetooth, 4G stand far wider. peak[] holds the dB levels'
  * running sum.
  */
-#define WIDTH_KHZ      300
-#define WIDTH_DB       5.0f
 #define WIDTH_SKIRT_DB 1.5f
+static int width_khz = 600; /* $width: the spur cluster under 1842 MHz wanders over 1 MHz */
+static float width_db = 4.0f;
 static float width_ring(int k, int near, int far)
 {
 	float sum = 0.0f;
@@ -2224,7 +2224,7 @@ static float width_ring(int k, int near, int far)
 
 static void width_filter(void)
 {
-	int w = MAX(3, (int)lroundf((float)WIDTH_KHZ * (float)NFFT / (float)fs_khz()));
+	int w = MAX(3, (int)lroundf((float)width_khz * (float)NFFT / (float)fs_khz()));
 	float total = 0.0f;
 
 	for (unsigned int k = 0; k < NFFT; k++) {
@@ -2234,18 +2234,18 @@ static void width_filter(void)
 	for (int k = 0; k < (int)NFFT; k++) {
 		float base = width_ring(k, w, 3 * w);
 
-		if (fast_db(psd[k] + 1e-20f) - base <= WIDTH_DB) {
+		if (fast_db(psd[k] + 1e-20f) - base <= width_db) {
 			continue;
 		}
 		int a = k, b = k;
 
-		/* The core, above WIDTH_DB: narrow or not. */
-		while (b < (int)NFFT - 1 && fast_db(psd[b + 1] + 1e-20f) - base > WIDTH_DB &&
+		/* The core, above width_db: narrow or not. */
+		while (b < (int)NFFT - 1 && fast_db(psd[b + 1] + 1e-20f) - base > width_db &&
 		       b - a < w) {
 			b++;
 		}
 		if (b - a + 1 > w) {
-			while (b < (int)NFFT - 1 && fast_db(psd[b + 1] + 1e-20f) - base > WIDTH_DB) {
+			while (b < (int)NFFT - 1 && fast_db(psd[b + 1] + 1e-20f) - base > width_db) {
 				b++;
 			}
 			k = b; /* wide: a real signal's */
@@ -2550,7 +2550,7 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], post on|off, iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
-		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|width|off, flat on|off, region eu|us\n");
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|width|off, width <kHz> [dB], flat on|off, region eu|us\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
 	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
@@ -2630,7 +2630,7 @@ static void handle_cmd(char *line)
 		st.dirty_radio = true;
 		con_printf("ok bw %d\n", st.bw_mhz);
 	} else if (strcmp(line, "settle") == 0 && parse_int(arg, &v) && v >= 0 && v <= 3000) {
-		/* The wait after each retune, 200 us by default (see main()). */
+		/* The wait after each retune, 1 ms by default (see main()). */
 		esp_sdr_set_retune_settle((uint32_t)v);
 		con_printf("ok settle %d\n", (int)v);
 	} else if (strcmp(line, "region") == 0 && (strcmp(arg, "eu") == 0 || strcmp(arg, "us") == 0)) {
@@ -2640,6 +2640,17 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "flat") == 0 && parse_flag(arg, &flag)) {
 		flat_set(flag);
 		con_printf("ok flat %d\n", st.flat);
+	} else if (strcmp(line, "width") == 0 && strtol(arg, NULL, 10) >= 50 &&
+		   strtol(arg, NULL, 10) <= 3000) {
+		char *end;
+		float db;
+
+		width_khz = (int)strtol(arg, &end, 10);
+		db = strtof(end, &end);
+		db = db > 0.0f ? db : width_db;
+		width_db = CLAMP(db, 1.0f, 20.0f);
+		con_printf("ok width %d %d.%d\n", width_khz, (int)width_db,
+			   (int)(10.0f * width_db) % 10);
 	} else if (strcmp(line, "hide") == 0 && strcmp(arg, "width") == 0) {
 		st.hide_spurs = false;
 		st.width_filter = true;
@@ -2695,11 +2706,12 @@ int main(void)
 		return 0;
 	}
 	/*
-	 * Captures right after a 40 MHz hop matched settled ones (passband within 0.15 dB, clock
-	 * harmonics 0.5 dB, also across the 5/6 divider at 2210 MHz) with no wait at all, against
-	 * 3 ms by default: a retune now takes about 1 ms, which sets the speed of the sweeps.
+	 * Against the library's 3 ms: captures right after a 40 MHz hop matched settled ones
+	 * (passband within 0.15 dB, clock harmonics 0.5 dB) with no wait at all after a reset, but
+	 * after some power-ons the first 500 us or so make spurs up to +32 dB, smeared over several bins
+	 * (1802.8 MHz in the 80 MHz sweep on 1840, 2240.3 in the 160 on 2300); gone from 1 ms.
 	 */
-	esp_sdr_set_retune_settle(200U);
+	esp_sdr_set_retune_settle(1000U);
 	printk("waterfall: radio ready, gain table 0..%d\n", esp_sdr_rx_gain_max());
 
 	last_ms = k_uptime_get_32();
