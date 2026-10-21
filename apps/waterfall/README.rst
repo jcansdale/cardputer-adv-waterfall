@@ -106,17 +106,24 @@ tuning each FFT bin keeps the lower envelope of its level over a couple of secon
 whose envelope stands more than 2 dB above its neighbours' (9 to 24 bins either side) is
 divided by that excess. A steady line drops to the floor around it; a burst on top of it, or
 anywhere else, is left alone (the busiest rows came out the same with it on and off). The
-LO's own line is bridged over 120 kHz either side, and its skirt, a smooth bump of +3 dB at
-125 kHz falling to +1 dB at 500 kHz, is flattened the same way against the ring from 600 to
-1200 kHz out. After a retune the mask relearns over 40 rows; the last 24 tunings' masks are
+LO's own line is bridged over 120 kHz either side. After a retune the mask relearns over 40 rows; the last 24 tunings' masks are
 kept (their 64 strongest bins), so going back to one applies its mask at once. A real steady
 carrier is masked too: ``x`` turns the mask off.
 
+Every capture also carries the receiver's own shape about the LO: the analog filters'
+roll-off (-1 dB at 15 MHz from the LO at 80 MS/s, -2.7 at 20), a broad bump of up to +3 dB
+within a few hundred kHz of the LO, and a gentle rise towards the edges at 40 and 16 MS/s.
+Measured at 48 tunings from 1801 to 2788 MHz it is the same at every one (within 0.2 to
+0.4 dB), cold or after hours, and nearly the same at every gain, so ``f`` (on at start, ``F``
+in the header) divides it out with a table per capture rate and gain set (up to 35, up to 55,
+above), built from those measurements (``src/flat_tables.h``, `Calibration`_). At gains 20
+and 42 the background is then flat within 0.4 dB (1 MHz averages) where it varied by about
+4 dB; at 70 within about 1 dB. In the sweeps the shape used to repeat at every 32 MHz step
+(a "mowed lawn" of about 3.7 dB); it is down to about 1.7, the noise of the measurement.
+
 The 40 MHz span stays one capture: swept in two halves, a burst that began or ended between
-them showed in only one, torn at the seam. Its edges reach past the analog filters' flat
-+-18 MHz, -1.2 dB at 17 MHz from the LO and -2 at 19, which is put back (about 0.33 dB a MHz
-past 13), so it is flat within 0.4 dB. Every span now stays inside the filters, so nothing is
-dimmed. Below come a 30 pixel spectrum trace and the
+them showed in only one, torn at the seam. Every span now stays inside the filters, so nothing
+is dimmed. Below come a 30 pixel spectrum trace and the
 waterfall, newest row on top. A ``!`` after the frequency means the PLL reported the
 frequency outside its tuning window (``-ERANGE``).
 
@@ -154,6 +161,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
 ``p``   speed: bursts per row (peak hold), 8 (at start), 4, 2, 1, 32, 16
 ``x``   mask the receiver's own steady lines on / off (on at start)
+``f``   flatten the receiver's own shape on / off (on at start)
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
 ``m``   fixed gain +1
 ``g``   AGC
@@ -223,6 +231,7 @@ Command               Action
 ``$gain <n|auto>``    fixed gain table index or AGC
 ``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
 ``$hide on|off``      the steady-line mask (display only)
+``$flat on|off``      the receiver's shape divided out (display only)
 ``$region eu|us``     which band table labels the bands and the number keys
 ``$post on|off``      ``$bins`` frames after the mask, as drawn, instead of before it
 ``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
@@ -232,7 +241,8 @@ Command               Action
 Spectra and I/Q come back as binary frames between the text lines: ``ESDR``, a 28-byte
 little-endian header (type, sequence number, uptime, LO, sample rate, gain, bursts), the
 payload, then a CRC-32 (see ``struct frame_hdr`` in ``src/main.c``). Spectra are the rows as
-captured, before the LO patch and the steady-line mask (after them with ``$post on``): int16
+captured, before the flattening, the LO patch and the steady-line mask (after them with
+``$post on``): int16
 hundredths of a dBFS from -fs/2 up,
 the LO in bin 512. I/Q samples are int16 pairs in raw units (-512 to 511).
 
@@ -250,3 +260,22 @@ the LO in bin 512. I/Q samples are int16 pairs in raw units (-512 to 511).
 Captures pause the screen unless ``--keep-screen`` is given. The tool opens the port with DTR
 and RTS raised: the USB Serial/JTAG resets the chip on RTS without DTR, which a plain open with
 both low passes through.
+
+Calibration
+***********
+
+``src/flat_tables.h`` is this board's: another board's filters may differ a little. To measure
+one (about 10 minutes, with the app running; it puts the settings back after):
+
+.. code-block:: console
+
+   tools/flatfield.py measure -o cal1.npz
+   tools/flatfield.py measure -o cal2.npz            # a second pass halves the noise
+   tools/flatfield.py header cal1.npz cal2.npz -o src/flat_tables.h --png shape.png
+
+then rebuild and flash. ``measure`` takes the raw bins at 48 LOs 21 MHz apart, at each capture
+rate and nine gains; ``header`` takes each rate's and gain set's median over the tunings. The
+board's clock harmonics (multiples of 4, 40 and 48 MHz) sit at fixed frequencies, so they land
+in different bins at each LO and drop out; on a round 20 MHz grid they had stayed in the same
+bins and the table cut notches for them at other tunings. The LO's own line, 6 to 27 dB and
+different from capture to capture, is left to the bridge.

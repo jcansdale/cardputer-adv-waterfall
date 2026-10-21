@@ -52,6 +52,8 @@
 #include <esp_sdr/esp_sdr.h>
 #include <esp_sdr/esp_sdr_dsp.h>
 
+#include "flat_tables.h"
+
 LOG_MODULE_REGISTER(waterfall, LOG_LEVEL_INF);
 
 /*
@@ -158,6 +160,7 @@ static uint16_t rev[NFFT];
 static bool use_dsp;
 static bool mask_fresh = true; /* relearn the steady-line mask (mask_update()) */
 static void mask_retune(int lo, int rate);
+static void flat_set(bool on);
 static float window_gain;
 
 static float row_db[W], trace_db[W];
@@ -179,6 +182,7 @@ static struct {
 	bool channels; /* the 2.4 GHz Wi-Fi channel overlay */
 	int peak; /* bursts per row, their per-bin maximum (1: one burst's average) */
 	bool hide_spurs; /* the steady-line mask (mask_update()) */
+	bool flat; /* the receiver's shape divided out (flat_apply()) */
 	enum esp_sdr_rate rate;
 	int gain; /* ESP_SDR_RX_GAIN_AUTO or a table index */
 	bool help;       /* the key help covers the screen */
@@ -219,6 +223,7 @@ static struct {
 	.auto_rotate = true,
 	.bw_mhz = 16,
 	.hide_spurs = true,
+	.flat = true,
 };
 
 /*
@@ -474,9 +479,9 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c G:%s %c%d/%d", st.view_khz / 1000,
+	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
-		 st.hide_spurs ? 'X' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
+		 st.hide_spurs ? 'X' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
 		 (int)st.range_db);
 	if (!st.screen) {
 		snprintf(line, sizeof(line), "SCREEN PAUSED BY HOST");
@@ -821,7 +826,7 @@ static void draw_help(void)
 		"-  =   DARKER/BRIGHTER  A  AUTO",
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
-		"X      MASK STEADY LINES (LEARNED)",
+		"X  MASK STEADY LINES  F  FLATTEN",
 		"V      AUTO-ROTATE (HOLD UPRIGHT)",
 		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
 		"YELLOW WI-FI 1-12  CYAN BLUETOOTH LE",
@@ -1146,8 +1151,9 @@ static void side_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "G:%d", st.gain);
 	}
-	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c", st.view_khz / 1000, st.view_khz % 1000,
-		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.hide_spurs ? 'X' : ' ');
+	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c%c", st.view_khz / 1000, st.view_khz % 1000,
+		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.hide_spurs ? 'X' : ' ',
+		 st.flat ? 'F' : ' ');
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
 	snprintf(text, sizeof(text), "%s %c%d/%d", gain, st.auto_floor ? 'A' : 'L',
 		 (int)st.floor_db, (int)st.range_db);
@@ -1529,6 +1535,9 @@ static void handle_key(char k)
 	case 'x':
 		st.hide_spurs = !st.hide_spurs;
 		break;
+	case 'f':
+		flat_set(!st.flat);
+		return;
 	case 'w':
 		st.channels = !st.channels;
 		return;
@@ -1862,6 +1871,28 @@ static int capture_psd(void)
 }
 
 /*
+ * The receiver's own shape about the LO (f): the analog filters' roll-off (-2.7 dB at
+ * +-20 MHz at 80 MS/s), a broad bump around the LO, a few faint lines at fixed offsets. It is
+ * the same at every tuning from 1800 to 2800 MHz (within 0.2 to 0.4 dB), cold or warm, and
+ * nearly so at every gain, so it is measured once (tools/flatfield.py, the median over 48
+ * tunings) and divided out of each capture: one table a rate and gain set (flat_tables.h).
+ * The LO's own line varies from capture to capture, 6 to 27 dB: lo_bridge()'s.
+ */
+static void flat_apply(void)
+{
+	int r = st.rate == ESP_SDR_RATE_80MSPS ? 0 : st.rate == ESP_SDR_RATE_40MSPS ? 1 : 2;
+	int g = st.gain == ESP_SDR_RX_GAIN_AUTO ? 1
+		: st.gain <= FLAT_GAIN_LOW	? 0
+		: st.gain <= FLAT_GAIN_MID	? 1
+						: 2;
+	const float *t = flat_tab[r][g];
+
+	for (unsigned int k = 0; k < NFFT; k++) {
+		psd[k] *= t[k];
+	}
+}
+
+/*
  * The steady-line mask (x). The board's own clock harmonics and the spurs that ride on the LO
  * are narrow and steady; where they fall depends on the LO, in ways no one formula covers, but
  * they repeat to the bin and within a few tenths of a dB. So for the current tuning each bin
@@ -1995,32 +2026,16 @@ static void mask_retune(int lo, int rate)
 	mask_fresh = true;
 }
 
-/*
- * The LO's skirt: a smooth bump, +3 dB at 125 kHz and +1 at 500 kHz either side (the same at
- * every LO, its height relative to the floor not with the gain), too broad for the line mask.
- * Within 600 kHz each bin is divided by its envelope's excess (over three bins) over the mean
- * envelope of the ring from 600 to 1200 kHz out.
- */
-static void mask_skirt(void)
+/* f, $flat: the lines' heights change, so the masks learned before are dropped. */
+static void flat_set(bool on)
 {
-	int r = 600 * (int)NFFT / fs_khz();
-	float base = 0.0f;
-
-	for (int j = r + 1; j <= 2 * r; j++) {
-		base += 0.01f * (float)(mask_q[(unsigned int)j] + mask_q[NFFT - (unsigned int)j]);
+	st.flat = on;
+	for (int i = 0; i < MASK_TUNINGS; i++) {
+		mask_cache[i].n = 0;
 	}
-	base /= (float)(2 * r);
-	for (int k = -r; k <= r; k++) {
-		float e = 0.0f;
-
-		for (int j = k - 1; j <= k + 1; j++) {
-			e += 0.01f * (float)mask_q[(unsigned int)((j + (int)NFFT) % (int)NFFT)];
-		}
-		e = e / 3.0f - base;
-		if (e > 0.3f) {
-			psd[(unsigned int)((k + (int)NFFT) % (int)NFFT)] *= powf(10.0f, -0.1f * e);
-		}
-	}
+	mask_seed = NULL;
+	mask_rows = 0;
+	mask_fresh = true;
 }
 
 static void mask_update(bool apply)
@@ -2041,7 +2056,6 @@ static void mask_update(bool apply)
 	if (!apply) {
 		return;
 	}
-	mask_skirt();
 	if (mask_rows < MASK_WARM && mask_seed != NULL) {
 		for (int i = 0; i < mask_seed->n; i++) {
 			psd[mask_seed->bin[i]] *= powf(10.0f, -0.001f * (float)mask_seed->cdb[i]);
@@ -2086,13 +2100,15 @@ static void lo_bridge(void)
 static void commit_row(float sum, unsigned int valid);
 
 /*
- * The spans of 40 MHz and wider sweep (40 in 2 steps, 80 in 3; a single capture's filters
- * pass only about +-18 MHz, the rest dim): the view in steps of at most 32 MHz, each
- * captured at 80 MS/s with the LO at its centre, of which only the middle (inside the
- * filters' +-18 MHz, clear of the edges) is used. A step is a retune (about 1 ms with the
- * short settle) and SWEEP_SAMPLES samples (4 FFTs averaged), the same capture as the other
- * spans; peak hold shares the P bursts of a row out over the steps (at least one each), so
- * a row takes about as long as at 16 MHz and the scroll speed falls smoothly with the width. No steady-line mask (it learns per tuning) and no frames.
+ * The spans of 80 MHz and wider sweep (80 in 3 steps; a single capture's filters pass only
+ * about +-18 MHz, the rest dim): the view in steps of at most 32 MHz, each captured at
+ * 80 MS/s with the LO at its centre, of which only the middle (inside the filters' +-18 MHz,
+ * clear of the edges) is used, its shape flattened like any capture's (flat_apply(); without
+ * it the shape repeats at every step). A step is a retune (about 1 ms with the short settle)
+ * and SWEEP_SAMPLES samples (4 FFTs averaged), the same capture as the other spans; peak hold
+ * shares the P bursts of a row out over the steps (at least one each), so a row takes about
+ * as long as at 16 MHz and the scroll speed falls smoothly with the width. No steady-line
+ * mask (it learns per tuning) and no frames.
  */
 /* Bins @p k - 2 to @p k + 2 about the LO (DC in bin 0) bridged from their neighbours. */
 static void patch_bins(int k)
@@ -2172,6 +2188,9 @@ static int capture_sweep(void)
 			}
 		}
 		memcpy(psd, peak, sizeof(psd));
+		if (st.flat) {
+			flat_apply();
+		}
 		lo_bridge();
 		if (st.hide_spurs) {
 			sweep_patch(centre);
@@ -2207,27 +2226,6 @@ static int capture_sweep(void)
 	return 0;
 }
 
-/*
- * The 40 MHz span is one 80 MS/s capture (swept, its halves tore bursts that began or ended
- * between them): the analog filters' roll-off at its edges, measured at three LOs, is
- * -0.6 dB at 15 MHz from the LO, -1.2 at 17, -2.0 at 19, about 0.33 dB a MHz past 13: put back.
- */
-static void edge_flatten(void)
-{
-	if (st.rate != ESP_SDR_RATE_80MSPS || sweeping()) {
-		return;
-	}
-	float bin_mhz = (float)fs_khz() / 1000.0f / (float)NFFT;
-
-	for (int k = -(int)NFFT / 2; k < (int)NFFT / 2; k++) {
-		float d = fabsf((float)k * bin_mhz) - 13.0f;
-
-		if (d > 0.0f) {
-			psd[(unsigned int)(k + (int)NFFT) % NFFT] *= powf(10.0f, 0.033f * MIN(d, 7.0f));
-		}
-	}
-}
-
 static int capture_row(void)
 {
 	/* Zoomed in, each of the zoom rows per redraw takes its share of the peak bursts. */
@@ -2259,11 +2257,13 @@ static int capture_row(void)
 		send_bins(psd, norm, bursts, (unsigned int)segments);
 	}
 
+	if (st.flat) {
+		flat_apply();
+	}
 	/* The board's own steady lines, learned and divided out (mask_update()). */
 	mask_update(st.hide_spurs);
 
 	lo_bridge();
-	edge_flatten();
 	if (st.bins_left != 0 && st.bins_post) {
 		send_bins(psd, norm, bursts, (unsigned int)segments);
 	}
@@ -2352,12 +2352,12 @@ static uint32_t loop_max_ms;
 static void print_status(void)
 {
 	con_printf("stat lo %d lo_khz %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
-	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u\n",
+	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u flat %d\n",
 	       st.lo_mhz, lo_khz(), st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
 	       st.hide_spurs, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
 	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.region_us ? "us" : "eu", st.orient, st.auto_rotate,
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
-	       (unsigned int)loop_max_ms);
+	       (unsigned int)loop_max_ms, st.flat);
 	loop_max_ms = 0U;
 
 }
@@ -2423,7 +2423,7 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], post on|off, iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
-		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off, region eu|us\n");
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off, flat on|off, region eu|us\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
 	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
@@ -2510,6 +2510,9 @@ static void handle_cmd(char *line)
 		st.region_us = arg[0] == 'u';
 		st.side_dirty = true;
 		con_printf("ok region %s\n", arg);
+	} else if (strcmp(line, "flat") == 0 && parse_flag(arg, &flag)) {
+		flat_set(flag);
+		con_printf("ok flat %d\n", st.flat);
 	} else if (strcmp(line, "hide") == 0 && parse_flag(arg, &flag)) {
 		st.hide_spurs = flag;
 		con_printf("ok hide %d\n", st.hide_spurs);
