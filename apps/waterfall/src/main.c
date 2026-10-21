@@ -16,7 +16,7 @@
  *   p     bursts per row (peak hold): 8 4 2 1 32 16, faster to the right, then slower
  *   - =   darker / brighter (floor +2 / -2 dB)    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
- *   x     mask the receiver's own steady lines on/off (learned, mask_update())
+ *   x     the receiver's own narrow lines cleared (width_filter()) on/off
  *   v     auto-rotate on/off: held upright, the portrait layout, scrolled by the panel
  *
  * The USB console takes the same keys, and lines starting with $ as commands for a host
@@ -53,7 +53,6 @@
 #include <esp_sdr/esp_sdr_dsp.h>
 
 #include "flat_tables.h"
-#include "spur_tables.h"
 
 LOG_MODULE_REGISTER(waterfall, LOG_LEVEL_INF);
 
@@ -161,8 +160,6 @@ static float cbuf[2 * NFFT] __aligned(16);
 static float dsp_w[NFFT] __aligned(16); /* cos, sin of tau i / NFFT, i bit reversed */
 static uint16_t rev[NFFT];
 static bool use_dsp;
-static bool mask_fresh = true; /* relearn the steady-line mask (mask_update()) */
-static void mask_retune(int lo, int rate);
 static void flat_set(bool on);
 static void shot_rect(unsigned int x, unsigned int y, unsigned int w, unsigned int h,
 		      const uint16_t *buf);
@@ -186,8 +183,7 @@ static struct {
 	bool trace_reset;
 	bool channels; /* the 2.4 GHz Wi-Fi channel overlay */
 	int peak; /* bursts per row, their per-bin maximum (1: one burst's average) */
-	bool hide_spurs; /* the steady-line mask (mask_update()) */
-	bool width_filter; /* instead: narrow lines clipped, blind (width_filter()) */
+	bool width_filter; /* narrow lines cleared, the receiver's own among them (x) */
 	bool shot_req, shot; /* $shot: the next redraw also goes to the host (shot_rect()) */
 	bool flat; /* the receiver's shape divided out (flat_apply()) */
 	enum esp_sdr_rate rate;
@@ -202,7 +198,7 @@ static struct {
 	bool screen;   /* drawing; off leaves more time for the host's captures */
 	int bins_left; /* rows whose full spectrum goes to the console, -1 for all */
 	int iq_left;   /* bursts whose raw I/Q goes to the console */
-	bool bins_post; /* send the spectra after the LO patch and the mask, as drawn */
+	bool bins_post; /* send the spectra after the flattening and the filters, as drawn */
 	int orient;       /* enum orient: held upright, the portrait layout */
 	bool auto_rotate; /* the orientation follows the accelerometer */
 	bool side_dirty;  /* the portrait layout needs drawing in full */
@@ -229,24 +225,9 @@ static struct {
 	.screen = true,
 	.auto_rotate = true,
 	.bw_mhz = 16,
-	.hide_spurs = false,
 	.width_filter = true,
 	.flat = true,
 };
-
-/*
- * The board hears its own clocks: steady carriers exactly on multiples of the 40 MHz crystal
- * and of the 48 MHz USB clock (measured at 2352, 2360, 2400, 2440, 2448 and 2496 MHz).
- */
-static bool is_spur_khz(int khz)
-{
-	return khz % 40000 == 0 || khz % 48000 == 0;
-}
-
-/* Calls fn(khz) for each harmonic from a to b kHz. */
-#define FOR_EACH_SPUR(a, b, khz)                                                              \
-	for (int khz = ((a) + 7999) / 8000 * 8000; khz <= (b); khz += 8000)                    \
-		if (is_spur_khz(khz))
 
 /* 5x7 font, ASCII 0x20 to 0x5d, columns LSB on top. */
 static const uint8_t font5x7[][5] = {
@@ -451,8 +432,7 @@ static void follow_view(void)
 		int spur = lo_spur_khz(lo);
 
 		/*
-		 * Keep the tuning while it still serves (fewer retunes, and the steady-line mask
-		 * stays learned): the LO 200 kHz or more off the view, the view within the capture
+		 * Keep the tuning while it still serves (fewer retunes): the LO 200 kHz or more off the view, the view within the capture
 		 * (or as far over its edge as the 8 MHz placement goes), its spur off the view.
 		 */
 		/*
@@ -492,7 +472,7 @@ static void draw_header(void)
 	}
 	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
-		 st.hide_spurs ? 'X' : st.width_filter ? 'W' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
+		 st.width_filter ? 'W' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
 		 (int)st.range_db);
 	if (!st.screen) {
 		snprintf(line, sizeof(line), "SCREEN PAUSED BY HOST");
@@ -560,14 +540,6 @@ static void draw_scale(void)
 				draw_text(fb, (unsigned int)lx, 0, num, fg);
 				next = lx + 6 * len + 2;
 			}
-		}
-	}
-	/* The board's own clock harmonics (magenta). */
-	FOR_EACH_SPUR(left, left + span - 1, khz) {
-		unsigned int x = (unsigned int)((int64_t)(khz - left) * W / span);
-
-		for (unsigned int y = SCALE_H - 3U; y < SCALE_H && x < W; y++) {
-			fb[y * W + x] = RGB565(220, 0, 220);
 		}
 	}
 	/* The view centre (white) and the tuning centre, the LO artefact (red; none in a sweep). */
@@ -837,9 +809,9 @@ static void draw_help(void)
 		"-  =   DARKER/BRIGHTER  A  AUTO",
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
-		"X      LINES: W/X/OFF  F  FLAT",
+		"X      NARROW LINES   F  FLAT",
 		"V      AUTO-ROTATE (HOLD UPRIGHT)",
-		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
+		"RED: TUNING CENTRE",
 		"YELLOW WI-FI 1-12  CYAN BLUETOOTH LE",
 		"ORANGE MAST  BLUE USER  VIOLET TDD",
 	};
@@ -1178,7 +1150,7 @@ static void side_header(void)
 		snprintf(gain, sizeof(gain), "G:%d", st.gain);
 	}
 	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c%c", st.view_khz / 1000, st.view_khz % 1000,
-		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.hide_spurs ? 'X' : st.width_filter ? 'W' : ' ',
+		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.width_filter ? 'W' : ' ',
 		 st.flat ? 'F' : ' ');
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
 	snprintf(text, sizeof(text), "%s %c%d/%d", gain, st.auto_floor ? 'A' : 'L',
@@ -1227,13 +1199,6 @@ static void side_scale(void)
 				draw_text_w(pbuf, PH, (unsigned int)lu, 0, text, RGB565(200, 200, 200));
 				next = lu + 6 * len + 2;
 			}
-		}
-	}
-	FOR_EACH_SPUR(left, left + span - 1, khz) {
-		int u = side_u(khz);
-
-		for (unsigned int v = SCALE_H - 3U; v < SCALE_H && u >= 0 && u < (int)PH; v++) {
-			pbuf[v * PH + (unsigned int)u] = RGB565(220, 0, 220);
 		}
 	}
 	int lo_u = sweeping() ? -1 : side_u(lo_khz());
@@ -1559,15 +1524,7 @@ static void handle_key(char k)
 		st.auto_floor = !st.auto_floor;
 		return;
 	case 'x':
-		/* The width filter (W), the mask (X), neither. */
-		if (st.width_filter) {
-			st.width_filter = false;
-			st.hide_spurs = true;
-		} else if (st.hide_spurs) {
-			st.hide_spurs = false;
-		} else {
-			st.width_filter = true;
-		}
+		st.width_filter = !st.width_filter;
 		break;
 	case 'f':
 		flat_set(!st.flat);
@@ -1599,7 +1556,6 @@ static void handle_key(char k)
 
 static void apply_radio(void)
 {
-	mask_retune(lo_khz(), (int)st.rate);
 	bool wide = st.rate != ESP_SDR_RATE_16MSPS;
 	uint32_t bw_min, bw_max;
 	int ret;
@@ -1970,22 +1926,6 @@ static void flat_apply(void)
 	}
 }
 
-/*
- * The steady-line mask (x). The board's own clock harmonics and the spurs that ride on the LO
- * are narrow and steady; where they fall depends on the LO, in ways no one formula covers, but
- * they repeat to the bin and within a few tenths of a dB. So for the current tuning each bin
- * keeps the lower envelope of its level (in dB: down fast, up at 2% a row, a couple of seconds),
- * and a bin whose envelope stands more than MASK_DB above its neighbours' (9 to 24 bins either
- * side) is a steady line: its power is divided by that excess, which takes the line down to
- * the floor around it but leaves a burst on top of it. Relearned after every retune; a real
- * steady carrier is masked too, which is why x turns it off.
- */
-#define MASK_DB    2.0f
-#define MASK_WARM  40 /* rows before the live mask takes over from a remembered one */
-#define MASK_NEAR  9
-#define MASK_FAR   24
-static int16_t mask_q[NFFT]; /* hundredths of a dB */
-
 /* 10 log10(x) within about 0.02 dB for normal x > 0: the exponent, a parabola over the mantissa. */
 static inline float fast_db(float x)
 {
@@ -1999,164 +1939,15 @@ static inline float fast_db(float x)
 	return 3.0103f * (e + (-0.34484843f * u.f + 2.02466578f) * u.f - 0.67487759f);
 }
 
-/*
- * The masks of the last MASK_TUNINGS tunings, each as its MASK_LINES strongest bins: back at
- * one, its mask applies at once while the live one relearns (MASK_WARM rows).
- */
-#define MASK_TUNINGS 24
-#define MASK_LINES   64
-static struct mask_entry {
-	int32_t lo_khz;
-	uint8_t rate, n;
-	uint16_t used;
-	uint16_t bin[MASK_LINES];
-	int16_t cdb[MASK_LINES]; /* the excess, hundredths of a dB */
-} mask_cache[MASK_TUNINGS];
-static const struct mask_entry *mask_seed;
-static int mask_lo_khz = -1, mask_rate = -1, mask_rows;
-static uint16_t mask_clock;
-
-/* The envelope's excess over its neighbours' at bin k; csum from mask_csum(). */
-static float mask_excess(const float *csum, float total, int k)
-{
-	float sum = 0.0f;
-
-	for (int side = -1; side <= 1; side += 2) {
-		int a = k + side * MASK_NEAR, b = k + side * MASK_FAR;
-		int lo = MIN(a, b), hi = MAX(a, b) + 1;
-
-		if (lo >= 0 && hi <= (int)NFFT) {
-			sum += (hi == (int)NFFT ? total : csum[hi]) - csum[lo];
-		} else {
-			for (int j = lo; j < hi; j++) {
-				sum += 0.01f * (float)mask_q[(unsigned int)((j + (int)NFFT) % (int)NFFT)];
-			}
-		}
-	}
-	return 0.01f * (float)mask_q[k] - sum / (float)(2 * (MASK_FAR - MASK_NEAR + 1));
-}
-
-/* csum[k]: the envelope summed over bins 0 to k - 1; returns the total. */
-static float mask_csum(float *csum)
-{
-	float total = 0.0f;
-
-	for (unsigned int k = 0; k < NFFT; k++) {
-		csum[k] = total;
-		total += 0.01f * (float)mask_q[k];
-	}
-	return total;
-}
-
-/* At a retune (between rows, peak[] free): keep the learned mask, then look up the new one. */
-static void mask_retune(int lo, int rate)
-{
-	if (mask_rows >= MASK_WARM && mask_lo_khz >= 0) {
-		struct mask_entry *e = NULL, *oldest = &mask_cache[0];
-		float total = mask_csum(peak);
-
-		for (int i = 0; i < MASK_TUNINGS; i++) {
-			if (mask_cache[i].lo_khz == mask_lo_khz && mask_cache[i].rate == mask_rate) {
-				e = &mask_cache[i];
-			}
-			if ((uint16_t)(mask_clock - mask_cache[i].used) >
-			    (uint16_t)(mask_clock - oldest->used)) {
-				oldest = &mask_cache[i];
-			}
-		}
-		e = e != NULL ? e : oldest;
-		e->lo_khz = mask_lo_khz;
-		e->rate = (uint8_t)mask_rate;
-		e->used = mask_clock++;
-		e->n = 0;
-		for (int k = 0; k < (int)NFFT; k++) {
-			float x = mask_excess(peak, total, k);
-			int slot = e->n;
-
-			if (x <= MASK_DB) {
-				continue;
-			}
-			if (slot == MASK_LINES) { /* full: replace the weakest if weaker */
-				slot = 0;
-				for (int j = 1; j < MASK_LINES; j++) {
-					slot = e->cdb[j] < e->cdb[slot] ? j : slot;
-				}
-				if (e->cdb[slot] >= (int16_t)(100.0f * x)) {
-					continue;
-				}
-			} else {
-				e->n++;
-			}
-			e->bin[slot] = (uint16_t)k;
-			e->cdb[slot] = (int16_t)MIN(100.0f * x, 32767.0f);
-		}
-	}
-	mask_seed = NULL;
-	for (int i = 0; i < MASK_TUNINGS; i++) {
-		if (mask_cache[i].n > 0 && mask_cache[i].lo_khz == lo && mask_cache[i].rate == rate) {
-			mask_seed = &mask_cache[i];
-			mask_cache[i].used = mask_clock++;
-		}
-	}
-	mask_lo_khz = lo;
-	mask_rate = rate;
-	mask_rows = 0;
-	mask_fresh = true;
-}
-
-/* f, $flat: the lines' heights change, so the masks learned before are dropped. */
+/* f, $flat */
 static void flat_set(bool on)
 {
 	st.flat = on;
-	for (int i = 0; i < MASK_TUNINGS; i++) {
-		mask_cache[i].n = 0;
-	}
-	mask_seed = NULL;
-	mask_rows = 0;
-	mask_fresh = true;
-}
-
-static void mask_update(bool apply)
-{
-	for (unsigned int k = 0; k < NFFT; k++) {
-		float x = fast_db(psd[k] + 1e-20f);
-		float q = 0.01f * (float)mask_q[k];
-
-		if (mask_fresh) {
-			q = x;
-		} else {
-			q += (x < q ? 0.3f : 0.02f) * (x - q);
-		}
-		mask_q[k] = (int16_t)CLAMP(lroundf(100.0f * q), -32768L, 32767L);
-	}
-	mask_fresh = false;
-	mask_rows++;
-	if (!apply) {
-		return;
-	}
-	if (mask_rows < MASK_WARM && mask_seed != NULL) {
-		for (int i = 0; i < mask_seed->n; i++) {
-			psd[mask_seed->bin[i]] *= powf(10.0f, -0.001f * (float)mask_seed->cdb[i]);
-		}
-		return;
-	}
-	/* peak[] is free here (copied to psd[]): the envelope's running sum. */
-	float total = mask_csum(peak);
-
-	for (int k = 0; k < (int)NFFT; k++) {
-		float excess = mask_excess(peak, total, k);
-
-		if (excess > MASK_DB) {
-			psd[k] *= powf(10.0f, -0.1f * excess);
-		}
-	}
 }
 
 /*
  * The LO leakage and DC residue, with the skirt around them (+3 dB out to about 110 kHz at
  * every LO): bridged over 120 kHz either side, from the mean of three bins beyond each end.
- * After the mask, which learns from the bins as captured: a smooth bridge has no noise
- * spread, so its lower envelope stood above its neighbours' and the mask cut a 4 dB hole.
  */
 static void lo_bridge(void)
 {
@@ -2178,93 +1969,13 @@ static void lo_bridge(void)
 static void commit_row(float sum, unsigned int valid);
 
 /*
- * The spans of 80 MHz and wider sweep (80 in 3 steps; a single capture's filters pass only
- * about +-18 MHz, the rest dim): the view in steps of at most 32 MHz, each captured at
- * 80 MS/s with the LO at its centre, of which only the middle (inside the filters' +-18 MHz,
- * clear of the edges) is used, its shape flattened like any capture's (flat_apply(); without
- * it the shape repeats at every step). A step is a retune (about 1 ms with the short settle)
- * and SWEEP_SAMPLES samples (4 FFTs averaged), the same capture as the other spans; peak hold
- * shares the P bursts of a row out over the steps (at least one each), so a row takes about
- * as long as at 16 MHz and the scroll speed falls smoothly with the width. No steady-line
- * mask (it learns per tuning) and no frames.
- */
-/* Bins @p k - 2 to @p k + 2 about the LO (DC in bin 0) bridged from their neighbours. */
-static void patch_bins(int k)
-{
-	if (k < -(int)NFFT / 2 + 4 || k > (int)NFFT / 2 - 4) {
-		return;
-	}
-	float fill = 0.5f * (psd[(unsigned int)(k - 3 + (int)NFFT) % NFFT] +
-			     psd[(unsigned int)(k + 3 + (int)NFFT) % NFFT]);
-
-	for (int j = k - 2; j <= k + 2; j++) {
-		psd[(unsigned int)(j + (int)NFFT) % NFFT] = fill;
-	}
-}
-
-/* Bins @p a to @p b about the LO bridged straight from the mean of three beyond each end. */
-static void bridge_bins(int a, int b)
-{
-	if (a < -(int)NFFT / 2 + 4 || b > (int)NFFT / 2 - 4) {
-		return;
-	}
-	float l = 0.0f, r = 0.0f;
-
-	for (int j = 1; j <= 3; j++) {
-		l += psd[(unsigned int)(a - j + (int)NFFT) % NFFT];
-		r += psd[(unsigned int)(b + j + (int)NFFT) % NFFT];
-	}
-	for (int k = a; k <= b; k++) {
-		psd[(unsigned int)(k + (int)NFFT) % NFFT] =
-			(l + (r - l) * (float)(k - a + 1) / (float)(b - a + 2)) / 3.0f;
-	}
-}
-
-/*
- * The receiver's own lines at this LO, measured at 80 MS/s at every whole-MHz LO
- * (tools/spurs.py, spur_tables.h): they move with the LO in ways no formula covers (a cluster
- * 2.3 to 3.6 MHz below it under 1842 MHz, in one of two places depending on the boot;
- * families at (LO - 2280) / 3 and (LO - 2520) / 3 from it; ...), and some come and go,
- * which the learned mask lets through. Bridged.
- */
-static void spur_bridge(int lo)
-{
-	int mhz = lo / 1000;
-
-	if (st.rate != ESP_SDR_RATE_80MSPS || lo % 1000 != 0 || mhz < SPUR_LO_MIN ||
-	    mhz > SPUR_LO_MAX) {
-		return;
-	}
-	for (int i = spur_idx[mhz - SPUR_LO_MIN]; i < spur_idx[mhz - SPUR_LO_MIN + 1]; i++) {
-		bridge_bins(spur_run[i][0], spur_run[i][1]);
-	}
-}
-
-/*
- * x while sweeping, in place of the mask (it learns per tuning, too slowly for a sweep): the
- * board's clock harmonics and the spur riding on this step's LO patched over, and its other
- * measured lines bridged (spur_bridge()).
- */
-static void sweep_patch(int lo)
-{
-	int half = fs_khz() / 2;
-
-	FOR_EACH_SPUR(lo - half, lo + half, khz) {
-		patch_bins((int)lroundf((float)(khz - lo) * (float)NFFT / (float)fs_khz()));
-	}
-	patch_bins((int)lroundf((float)(lo_spur_khz(lo) - lo) * (float)NFFT / (float)fs_khz()));
-
-	spur_bridge(lo);
-}
-
-/*
- * The width filter (x's second setting, W), blind, to compare with the mask and the measured
- * spur list: a run of bins standing more than width_db above the mean (in dB) of a ring one to
- * three widths out is a line when that core is no wider than width_khz; it and its skirts
- * (above WIDTH_SKIRT_DB, up to width_khz either side) are set to that mean. The receiver's
- * spurs go, steady or not, but so do real narrow signals: NB-IoT and GSM carriers (180,
- * 200 kHz) and narrower. Wi-Fi, Bluetooth, 4G stand far wider. peak[] holds the dB levels'
- * running sum.
+ * The width filter (x, W in the header): the receiver's own lines are all narrow (its clock
+ * harmonics, spurs that move with the LO in ways no formula covers, more of them under
+ * 1842 MHz), so, blind: a run of bins standing more than width_db above the mean (in dB) of
+ * a ring one to three widths out is a line when that core is no wider than width_khz; it and
+ * its skirts (above WIDTH_SKIRT_DB, up to width_khz either side) are set to that mean. Steady
+ * or not, they go, but so do real narrow signals: NB-IoT and GSM carriers (180, 200 kHz) and
+ * narrower. Wi-Fi, Bluetooth, 4G stand far wider. peak[] holds the dB levels' running sum.
  */
 #define WIDTH_SKIRT_DB 1.5f
 static int width_khz = 600; /* $width: the spur cluster under 1842 MHz wanders over 1 MHz */
@@ -2338,6 +2049,16 @@ static void width_filter(void)
 	}
 }
 
+/*
+ * The spans of 80 MHz and wider sweep (80 in 3 steps; a single capture's filters pass only
+ * about +-18 MHz, the rest dim): the view in steps of at most 32 MHz, each captured at
+ * 80 MS/s with the LO at its centre, of which only the middle (inside the filters' +-18 MHz,
+ * clear of the edges) is used, its shape flattened like any capture's (flat_apply(); without
+ * it the shape repeats at every step). A step is a retune (about 1 ms with the short settle)
+ * and SWEEP_SAMPLES samples (4 FFTs averaged), the same capture as the other spans; peak hold
+ * shares the P bursts of a row out over the steps (at least one each), so a row takes about
+ * as long as at 16 MHz and the scroll speed falls smoothly with the width. No frames.
+ */
 #define SWEEP_STEP_KHZ 32000
 #define SWEEP_SAMPLES  SAMPLES
 static int capture_sweep(void)
@@ -2379,9 +2100,7 @@ static int capture_sweep(void)
 			flat_apply();
 		}
 		lo_bridge();
-		if (st.hide_spurs) {
-			sweep_patch(centre);
-		} else if (st.width_filter) {
+		if (st.width_filter) {
 			width_filter();
 		}
 
@@ -2449,12 +2168,7 @@ static int capture_row(void)
 	if (st.flat) {
 		flat_apply();
 	}
-	/* The board's own steady lines, learned and divided out (mask_update()). */
-	mask_update(st.hide_spurs);
-	/* After the mask, like the LO's bridge: a smooth bridge would look like a line to it. */
-	if (st.hide_spurs) {
-		spur_bridge(lo_khz());
-	} else if (st.width_filter) {
+	if (st.width_filter) {
 		width_filter();
 	}
 
@@ -2549,7 +2263,7 @@ static void print_status(void)
 	con_printf("stat lo %d lo_khz %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
 	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u flat %d\n",
 	       st.lo_mhz, lo_khz(), st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
-	       st.hide_spurs ? 1 : st.width_filter ? 2 : 0, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
+	       st.width_filter, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
 	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.region_us ? "us" : "eu", st.orient, st.auto_rotate,
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
 	       (unsigned int)loop_max_ms, st.flat);
@@ -2618,7 +2332,7 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], post on|off, iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
-		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|width|off, width <kHz> [dB], shot, flat on|off, region eu|us\n");
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off, width <kHz> [dB], shot, flat on|off, region eu|us\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
 	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
@@ -2723,14 +2437,9 @@ static void handle_cmd(char *line)
 		/* The screen as drawn, at the next redraw (shot_end()). */
 		st.shot_req = st.screen;
 		con_printf(st.screen ? "ok shot\n" : "err shot screen paused\n");
-	} else if (strcmp(line, "hide") == 0 && strcmp(arg, "width") == 0) {
-		st.hide_spurs = false;
-		st.width_filter = true;
-		con_printf("ok hide width\n");
 	} else if (strcmp(line, "hide") == 0 && parse_flag(arg, &flag)) {
-		st.hide_spurs = flag;
-		st.width_filter = false;
-		con_printf("ok hide %d\n", st.hide_spurs);
+		st.width_filter = flag;
+		con_printf("ok hide %d\n", st.width_filter);
 	} else {
 		con_printf("err %s %s (try $help)\n", line, arg);
 	}

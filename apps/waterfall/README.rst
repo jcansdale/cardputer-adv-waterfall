@@ -50,17 +50,8 @@ Span (MHz)  1000  640  320  160   80   40   16    8    4    2
 ``P1``         4    7   12   19   25   37   37   62   84  109
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
 
-At 320 MHz and wider a step gets one burst, so short bursts are often missed there. The steady-line mask is off while sweeping; ``x``
-patches the clock harmonics and each step's LO spur instead, and bridges the receiver's other
-lines that move with the LO, measured at every whole-MHz LO (``src/spur_tables.h``,
-`Calibration`_): a cluster up to +13 dB and 1 MHz wide 2.3 to 3.6 MHz below the LO under
-1842 MHz, families at (LO - 2280) / 3 and (LO - 2520) / 3 from it, and others; under one
-short run of bins per LO on average. The 40 MHz span (the same 80 MS/s capture) bridges them
-too, after the mask, which lets lines that come and go through. Under 1842 MHz the cluster
-sits in one of two places, about 1.7 MHz apart, depending on the boot: after a reset (flashing
-included) always the higher, after power-on usually the lower (3 times in 4). The table holds
-both. ``$settle``
-changes the wait after each retune, for experiments.
+At 320 MHz and wider a step gets one burst, so short bursts are often missed there.
+``$settle`` changes the wait after each retune, for experiments.
 
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
 FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. The display
@@ -103,31 +94,22 @@ which has a narrow artefact of its own (LO leakage, patched over, with a skirt o
 receiver also makes a spur that moves with the LO, at LO + (LO - 2400 MHz) / 3 (2386.67 MHz
 when tuned to 2390): offset tuning goes above the view instead when below would put it on
 the screen. Scrolling keeps the tuning while it still serves (the view inside the capture,
-the LO and its spur off it), so at 4 and 2 MHz most steps do not retune. Magenta marks
-are the board's own clock harmonics: steady, narrow carriers exactly on multiples of the
-40 MHz crystal and the 48 MHz USB clock (2352, 2360, 2400, 2440, 2448 and 2496 MHz measured; 2448 on battery too).
+the LO and its spur off it), so at 4 and 2 MHz most steps do not retune.
 
-There are more such lines than any list or formula covers (2416, 2504 and others at fixed
-frequencies, several that move with the LO), but each repeats to the bin and within a few
-tenths of a dB. ``x``'s second setting (``X`` in the header) learns them: for the current
-tuning each FFT bin keeps the lower envelope of its level over a couple of seconds, and a bin
-whose envelope stands more than 2 dB above its neighbours' (9 to 24 bins either side) is
-divided by that excess. A steady line drops to the floor around it; a burst on top of it, or
-anywhere else, is left alone (the busiest rows came out the same with it on and off). The
-LO's own line is bridged over 120 kHz either side. After a retune the mask relearns over 40 rows; the last 24 tunings' masks are
-kept (their 64 strongest bins), so going back to one applies its mask at once. A real steady
-carrier is masked too.
-
-At start (``W`` in the header) a blind width filter takes the lines instead: in every row, a run of bins more than 4 dB above the mean of a ring of bins one to
-three widths out is cleared, with its skirts, to that mean when the run is no wider than
-600 kHz (``$width <kHz> [dB]`` to experiment; under 1842 MHz the receiver's spur cluster
-wanders over most of 1 MHz). It needs no learning or table and takes the receiver's lines that come and go too,
-but it also takes real narrow signals (NB-IoT and GSM carriers, 180 and 200 kHz, and
-anything narrower); Wi-Fi, Bluetooth and 4G are wider and stay. In the sweeps it leaves no
-steady line at 80 and 160 MHz, as many as ``X``, and over 50 tunings of the 40 MHz span it
-left half as many narrow peaks above 6 dB (0.9 a view against 1.9; 3.7 with neither). ``X``
-keeps the real narrow carriers (the 4G masts' around 2560 to 2690 MHz, say); a third press of
-``x`` shows everything.
+The receiver makes more narrow lines of its own: the board's clock harmonics (multiples of
+the 40 MHz crystal and the 48 MHz USB clock: 2352, 2360, 2400, 2440, 2448, 2496 MHz and
+more), and spurs that move with the LO in ways no formula covers, more of them under
+1842 MHz, some there only now and then. They are all narrow, so ``x`` (on at start, ``W`` in
+the header) clears narrow lines, blind: in every row, a run of bins more than 4 dB above the
+mean of a ring of bins one to three widths out is cleared, with its skirts, to that mean when
+the run is no wider than 600 kHz (``$width <kHz> <dB>`` to experiment; under 1842 MHz the
+spur cluster wanders over most of 1 MHz). It needs no learning or table and takes lines that
+come and go too, but it also takes real narrow signals (NB-IoT and GSM carriers, 180 and
+200 kHz, and anything narrower); Wi-Fi, Bluetooth and 4G are wider and stay; ``x`` again
+shows everything. In the sweeps it leaves no steady line at 160 MHz (8 without), and over 50
+tunings of the 40 MHz span it left 0.9 narrow peaks above 6 dB a view against 3.7, half as
+many as a learned per-tuning mask with a measured spur list did (since removed, with the
+magenta clock marks on the scale).
 
 Every capture also carries the receiver's own shape about the LO: the analog filters'
 roll-off (-1 dB at 15 MHz from the LO at 80 MS/s, -2.7 at 20), a broad bump of up to +3 dB
@@ -184,8 +166,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``a``   automatic colour floor on / off
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
 ``p``   speed: bursts per row (peak hold), 8 (at start), 4, 2, 1, 32, 16
-``x``   the receiver's own lines: width filter (``W``, at start), masked and
-        bridged (``X``), or shown
+``x``   clear narrow lines, the receiver's own among them (``W``, on at start)
 ``f``   flatten the receiver's own shape on / off (on at start)
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
 ``m``   fixed gain +1
@@ -255,12 +236,11 @@ Command               Action
 ``$span <MHz>``       1000, 640, 320, 160, 80 (swept), 40, 16, 8, 4 or 2
 ``$gain <n|auto>``    fixed gain table index or AGC
 ``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
-``$hide <how>``       ``on``: the steady-line mask, ``width``: the width filter,
-                      ``off``: neither
+``$hide on|off``      the width filter (``x``)
 ``$width <k> <dB>``   the width filter's widest line (kHz) and threshold (600 4)
 ``$flat on|off``      the receiver's shape divided out (display only)
 ``$region eu|us``     which band table labels the bands and the number keys
-``$post on|off``      ``$bins`` frames after the mask, as drawn, instead of before it
+``$post on|off``      ``$bins`` frames as drawn, instead of as captured
 ``$shot``             the screen as drawn, as frames (``wf_serial.py shot``)
 ``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
                       ``right`` (that edge down, portrait)
@@ -269,7 +249,7 @@ Command               Action
 Spectra and I/Q come back as binary frames between the text lines: ``ESDR``, a 28-byte
 little-endian header (type, sequence number, uptime, LO, sample rate, gain, bursts), the
 payload, then a CRC-32 (see ``struct frame_hdr`` in ``src/main.c``). Spectra are the rows as
-captured, before the flattening, the LO patch and the steady-line mask (after them with
+captured, before the flattening, the LO patch and the width filter (after them with
 ``$post on``): int16
 hundredths of a dBFS from -fs/2 up,
 the LO in bin 512. I/Q samples are int16 pairs in raw units (-512 to 511).
@@ -305,7 +285,7 @@ both low passes through.
 Calibration
 ***********
 
-``src/flat_tables.h`` and ``src/spur_tables.h`` are this board's: another board's may differ. To measure
+``src/flat_tables.h`` is this board's: another board's filters may differ a little. To measure
 one (about 10 minutes, with the app running; it puts the settings back after):
 
 .. code-block:: console
@@ -314,22 +294,7 @@ one (about 10 minutes, with the app running; it puts the settings back after):
    tools/flatfield.py measure -o cal2.npz            # a second pass halves the noise
    tools/flatfield.py header cal1.npz cal2.npz -o src/flat_tables.h --png shape.png
 
-and for the spur list (about 5 minutes, and a replug or two until a boot shows the other
-pattern under 1842 MHz):
-
-.. code-block:: console
-
-   tools/spurs.py measure -o spurs.npz                          # after a reset
-   tools/spurs.py measure --from 1795 --to 1860 -o poweron.npz  # replugged
-   tools/spurs.py header spurs.npz poweron.npz -o src/spur_tables.h --png lines.png
-
-then rebuild and flash. ``spurs.py`` takes the raw bins at 80 MS/s at all 1001 whole-MHz LOs
-(the steps' LOs), the median and 90th percentile of 16 captures each, and keeps a bin standing
-above its neighbours (steadily, or strongly in a few captures) only when it moves with the LO:
-a line at one radio frequency over the neighbouring LOs is a real signal or a clock harmonic,
-and one with no neighbour near its offset at the next LO is noise or a passing signal.
-
-``flatfield.py measure`` takes the raw bins at 48 LOs 21 MHz apart, at each capture
+then rebuild and flash. ``flatfield.py measure`` takes the raw bins at 48 LOs 21 MHz apart, at each capture
 rate and nine gains; ``header`` takes each rate's and gain set's median over the tunings. The
 board's clock harmonics (multiples of 4, 40 and 48 MHz) sit at fixed frequencies, so they land
 in different bins at each LO and drop out; on a round 20 MHz grid they had stayed in the same
