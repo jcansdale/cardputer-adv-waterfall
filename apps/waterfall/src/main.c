@@ -224,7 +224,8 @@ static struct {
 	.screen = true,
 	.auto_rotate = true,
 	.bw_mhz = 16,
-	.hide_spurs = true,
+	.hide_spurs = false,
+	.width_filter = true,
 	.flat = true,
 };
 
@@ -828,7 +829,7 @@ static void draw_help(void)
 		"-  =   DARKER/BRIGHTER  A  AUTO",
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
-		"X  LINES: MASK/WIDTH/OFF F  FLAT",
+		"X  LINES: WIDTH/MASK/OFF F  FLAT",
 		"V      AUTO-ROTATE (HOLD UPRIGHT)",
 		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
 		"YELLOW WI-FI 1-12  CYAN BLUETOOTH LE",
@@ -1535,14 +1536,14 @@ static void handle_key(char k)
 		st.auto_floor = !st.auto_floor;
 		return;
 	case 'x':
-		/* The mask (X), the width filter (W), neither: to compare. */
-		if (st.hide_spurs) {
-			st.hide_spurs = false;
-			st.width_filter = true;
-		} else if (st.width_filter) {
+		/* The width filter (W), the mask (X), neither. */
+		if (st.width_filter) {
 			st.width_filter = false;
-		} else {
 			st.hide_spurs = true;
+		} else if (st.hide_spurs) {
+			st.hide_spurs = false;
+		} else {
+			st.width_filter = true;
 		}
 		break;
 	case 'f':

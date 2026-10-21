@@ -108,24 +108,25 @@ are the board's own clock harmonics: steady, narrow carriers exactly on multiple
 
 There are more such lines than any list or formula covers (2416, 2504 and others at fixed
 frequencies, several that move with the LO), but each repeats to the bin and within a few
-tenths of a dB. So ``x`` (on at start, ``X`` in the header) learns them: for the current
+tenths of a dB. ``x``'s second setting (``X`` in the header) learns them: for the current
 tuning each FFT bin keeps the lower envelope of its level over a couple of seconds, and a bin
 whose envelope stands more than 2 dB above its neighbours' (9 to 24 bins either side) is
 divided by that excess. A steady line drops to the floor around it; a burst on top of it, or
 anywhere else, is left alone (the busiest rows came out the same with it on and off). The
 LO's own line is bridged over 120 kHz either side. After a retune the mask relearns over 40 rows; the last 24 tunings' masks are
 kept (their 64 strongest bins), so going back to one applies its mask at once. A real steady
-carrier is masked too: ``x`` turns the mask off.
+carrier is masked too.
 
-For comparison ``x``'s second setting (``W`` in the header) swaps all that for a blind width
-filter: in every row, a run of bins more than 4 dB above the mean of a ring of bins one to
+At start (``W`` in the header) a blind width filter takes the lines instead: in every row, a run of bins more than 4 dB above the mean of a ring of bins one to
 three widths out is cleared, with its skirts, to that mean when the run is no wider than
 600 kHz (``$width <kHz> [dB]`` to experiment; under 1842 MHz the receiver's spur cluster
 wanders over most of 1 MHz). It needs no learning or table and takes the receiver's lines that come and go too,
 but it also takes real narrow signals (NB-IoT and GSM carriers, 180 and 200 kHz, and
 anything narrower); Wi-Fi, Bluetooth and 4G are wider and stay. In the sweeps it leaves no
-steady line at 80 and 160 MHz, as many as ``X``. A third press shows
-everything.
+steady line at 80 and 160 MHz, as many as ``X``, and over 50 tunings of the 40 MHz span it
+left half as many narrow peaks above 6 dB (0.9 a view against 1.9; 3.7 with neither). ``X``
+keeps the real narrow carriers (the 4G masts' around 2560 to 2690 MHz, say); a third press of
+``x`` shows everything.
 
 Every capture also carries the receiver's own shape about the LO: the analog filters'
 roll-off (-1 dB at 15 MHz from the LO at 80 MS/s, -2.7 at 20), a broad bump of up to +3 dB
@@ -177,8 +178,8 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``a``   automatic colour floor on / off
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
 ``p``   speed: bursts per row (peak hold), 8 (at start), 4, 2, 1, 32, 16
-``x``   the receiver's own lines: masked and bridged (``X``, at start), width
-        filter (``W``), or shown
+``x``   the receiver's own lines: width filter (``W``, at start), masked and
+        bridged (``X``), or shown
 ``f``   flatten the receiver's own shape on / off (on at start)
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
 ``m``   fixed gain +1
