@@ -53,6 +53,7 @@
 #include <esp_sdr/esp_sdr_dsp.h>
 
 #include "flat_tables.h"
+#include "spur_tables.h"
 
 LOG_MODULE_REGISTER(waterfall, LOG_LEVEL_INF);
 
@@ -2144,7 +2145,10 @@ static void bridge_bins(int a, int b)
 
 /*
  * x while sweeping, in place of the mask (it learns per tuning, too slowly for a sweep): the
- * board's clock harmonics and the spur riding on this step's LO patched over.
+ * board's clock harmonics and the spur riding on this step's LO patched over, and the bins
+ * spur_tables.h lists for this LO bridged: the receiver's other lines, which move with the LO
+ * in ways no formula covers (a cluster 2.3 to 3.6 MHz below it under 1842 MHz, families at
+ * (LO - 2280) / 3 and (LO - 2520) / 3 from it, ...), measured at every whole-MHz LO.
  */
 static void sweep_patch(int lo)
 {
@@ -2155,19 +2159,12 @@ static void sweep_patch(int lo)
 	}
 	patch_bins((int)lroundf((float)(lo_spur_khz(lo) - lo) * (float)NFFT / (float)fs_khz()));
 
-	/*
-	 * Tuned below about 1842 MHz, the bottom of the range, the receiver makes more: a cluster
-	 * up to +13 dB and up to 1 MHz wide wandering between 3.6 and 2.3 MHz below the LO, and
-	 * weaker ones about 5.4, 8.5 and 11.1 MHz below. Measured at LOs from 1800 to 1844 MHz;
-	 * bridged as whole ranges (spots at 3.3, 2.9 and 2.5 left its peak showing between them).
-	 */
-	if (lo < 1842000) {
-		static const int16_t ofs_khz[][2] = {
-			{-3800, -2100}, {-5500, -5200}, {-8700, -8250}, {-11300, -10950}};
+	/* The receiver's own lines at this LO, measured (tools/spurs.py). */
+	int mhz = lo / 1000;
 
-		for (size_t i = 0; i < ARRAY_SIZE(ofs_khz); i++) {
-			bridge_bins((int)floorf((float)ofs_khz[i][0] * (float)NFFT / (float)fs_khz()),
-				    (int)ceilf((float)ofs_khz[i][1] * (float)NFFT / (float)fs_khz()));
+	if (lo % 1000 == 0 && mhz >= SPUR_LO_MIN && mhz <= SPUR_LO_MAX) {
+		for (int i = spur_idx[mhz - SPUR_LO_MIN]; i < spur_idx[mhz - SPUR_LO_MIN + 1]; i++) {
+			bridge_bins(spur_run[i][0], spur_run[i][1]);
 		}
 	}
 }

@@ -50,10 +50,11 @@ Span (MHz)  1000  640  320  160   80   40   16    8    4    2
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
 
 At 320 MHz and wider a step gets one burst, so short bursts are often missed there. The steady-line mask is off while sweeping; ``x``
-patches the clock harmonics and each step's LO spurs instead, including those the receiver
-makes when tuned below about 1842 MHz (a cluster up to +13 dB and 1 MHz wide wandering
-between 2.3 and 3.6 MHz below the LO, bridged as a whole, and weaker ones about 5.4, 8.5 and
-11.1 MHz below). ``$settle``
+patches the clock harmonics and each step's LO spur instead, and bridges the receiver's other
+lines that move with the LO, measured at every whole-MHz LO (``src/spur_tables.h``,
+`Calibration`_): a cluster up to +13 dB and 1 MHz wide 2.3 to 3.6 MHz below the LO under
+1842 MHz, families at (LO - 2280) / 3 and (LO - 2520) / 3 from it, and others; about one
+short run of bins per LO on average. ``$settle``
 changes the wait after each retune, for experiments.
 
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
@@ -265,7 +266,7 @@ both low passes through.
 Calibration
 ***********
 
-``src/flat_tables.h`` is this board's: another board's filters may differ a little. To measure
+``src/flat_tables.h`` and ``src/spur_tables.h`` are this board's: another board's may differ. To measure
 one (about 10 minutes, with the app running; it puts the settings back after):
 
 .. code-block:: console
@@ -274,7 +275,20 @@ one (about 10 minutes, with the app running; it puts the settings back after):
    tools/flatfield.py measure -o cal2.npz            # a second pass halves the noise
    tools/flatfield.py header cal1.npz cal2.npz -o src/flat_tables.h --png shape.png
 
-then rebuild and flash. ``measure`` takes the raw bins at 48 LOs 21 MHz apart, at each capture
+and for the sweeps' spur list (about 5 minutes):
+
+.. code-block:: console
+
+   tools/spurs.py measure -o spurs.npz
+   tools/spurs.py header spurs.npz -o src/spur_tables.h --png lines.png
+
+then rebuild and flash. ``spurs.py`` takes the raw bins at 80 MS/s at all 1001 whole-MHz LOs
+(the steps' LOs), the median and 90th percentile of 16 captures each, and keeps a bin standing
+above its neighbours (steadily, or strongly in a few captures) only when it moves with the LO:
+a line at one radio frequency over the neighbouring LOs is a real signal or a clock harmonic,
+and one with no neighbour near its offset at the next LO is noise or a passing signal.
+
+``flatfield.py measure`` takes the raw bins at 48 LOs 21 MHz apart, at each capture
 rate and nine gains; ``header`` takes each rate's and gain set's median over the tunings. The
 board's clock harmonics (multiples of 4, 40 and 48 MHz) sit at fixed frequencies, so they land
 in different bins at each LO and drop out; on a round 20 MHz grid they had stayed in the same
