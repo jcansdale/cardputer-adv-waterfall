@@ -141,7 +141,10 @@ and 42 the background is then flat within 0.4 dB (1 MHz averages) where it varie
 
 The 40 MHz span stays one capture: swept in two halves, a burst that began or ended between
 them showed in only one, torn at the seam. Every span now stays inside the filters, so nothing
-is dimmed. Below come a 30 pixel spectrum trace and the
+is dimmed. The display refreshes at 119 Hz, twice its default: with no tearing-effect line wired to
+time writes against, the panel's scan crosses what is being drawn in most frames, which at
+60 Hz showed as a shimmer over the waterfall and trace; at 119 Hz it is gone in portrait.
+Below come a 30 pixel spectrum trace and the
 waterfall, newest row on top. A ``!`` after the frequency means the PLL reported the
 frequency outside its tuning window (``-ERANGE``).
 
@@ -185,6 +188,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``m``   fixed gain +1
 ``g``   AGC
 ``v``   automatic portrait layout when held upright on / off
+``r``   the display's refresh: 119 Hz (at start) or 60 Hz
 ======  ===========================================
 
 Wi-Fi channels 1 to 12 are always labelled at the top of the spectrum trace, each number
@@ -256,6 +260,7 @@ Command               Action
 ``$region eu|us``     which band table labels the bands and the number keys
 ``$post on|off``      ``$bins`` frames after the mask, as drawn, instead of before it
 ``$shot``             the screen as drawn, as frames (``wf_serial.py shot``)
+``$refresh <0-31>``   the display's refresh rate setting: 0 is 119 Hz, 15 is 60
 ``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
                       ``right`` (that edge down, portrait)
 ====================  ===========================================================

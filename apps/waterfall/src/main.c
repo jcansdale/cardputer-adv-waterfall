@@ -836,7 +836,7 @@ static void draw_help(void)
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
 		"X      LINES: W/X/OFF  F  FLAT",
-		"V      AUTO-ROTATE (HOLD UPRIGHT)",
+		"V      AUTO-ROTATE  R  119/60 HZ",
 		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
 		"YELLOW WI-FI 1-12  CYAN BLUETOOTH LE",
 		"ORANGE MAST  BLUE USER  VIOLET TDD",
@@ -922,6 +922,21 @@ static const struct mipi_dbi_config dbi_cfg =
 
 #define ST7789_VSCRDEF 0x33
 #define ST7789_VSCSAD  0x37
+#define ST7789_FRCTRL2 0xc6
+
+/*
+ * The panel's refresh: RTNA 0 is about 119 Hz, its default 15 about 60, 31 about 39. With
+ * no TE line to time writes against (the Cardputer-Adv wires none), a write and the panel's
+ * scan cross somewhere in most frames (tearing); at 119 Hz each torn refresh shows for half
+ * as long.
+ */
+static uint8_t panel_rtna;
+
+static void panel_refresh(uint8_t rtna)
+{
+	panel_rtna = rtna;
+	mipi_dbi_command_write(dbi, &dbi_cfg, ST7789_FRCTRL2, &rtna, 1);
+}
 
 static bool scroll_on;
 static unsigned int scroll_off; /* the scroll area's first line, relative to its start */
@@ -1563,6 +1578,9 @@ static void handle_key(char k)
 		return;
 	case 'v':
 		st.auto_rotate = !st.auto_rotate;
+		return;
+	case 'r': /* the panel's refresh: 119 or 60 Hz */
+		panel_refresh(panel_rtna == 0U ? 15U : 0U);
 		return;
 	case 'g':
 		st.gain = ESP_SDR_RX_GAIN_AUTO;
@@ -2604,7 +2622,7 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], post on|off, iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
-		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|width|off, width <kHz> [dB], shot, flat on|off, region eu|us\n");
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|width|off, width <kHz> [dB], refresh <0-31>, shot, flat on|off, region eu|us\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
 	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
@@ -2705,6 +2723,9 @@ static void handle_cmd(char *line)
 		width_db = CLAMP(db, 1.0f, 20.0f);
 		con_printf("ok width %d %d.%d\n", width_khz, (int)width_db,
 			   (int)(10.0f * width_db) % 10);
+	} else if (strcmp(line, "refresh") == 0 && parse_int(arg, &v) && v >= 0 && v <= 31) {
+		panel_refresh((uint8_t)v);
+		con_printf("ok refresh %d\n", (int)v);
 	} else if (strcmp(line, "shot") == 0) {
 		/* The screen as drawn, at the next redraw (shot_end()). */
 		st.shot_req = st.screen;
@@ -2754,6 +2775,7 @@ int main(void)
 	draw_trace();
 	draw_waterfall();
 	display_blanking_off(display);
+	panel_refresh(0);
 
 	kbd_init();
 	imu_init();
