@@ -115,6 +115,14 @@ LO's own line is bridged over 120 kHz either side. After a retune the mask relea
 kept (their 64 strongest bins), so going back to one applies its mask at once. A real steady
 carrier is masked too: ``x`` turns the mask off.
 
+For comparison ``x``'s second setting (``W`` in the header) swaps all that for a blind width
+filter: in every row, a run of bins more than 5 dB above the mean of a ring of bins one to
+three widths out is cleared, with its skirts, to that mean when the run is no wider than
+300 kHz. It needs no learning or table and takes the receiver's lines that come and go too,
+but it also takes real narrow signals (NB-IoT and GSM carriers, 180 and 200 kHz, and
+anything narrower); Wi-Fi, Bluetooth and 4G are far wider and stay. A third press shows
+everything.
+
 Every capture also carries the receiver's own shape about the LO: the analog filters'
 roll-off (-1 dB at 15 MHz from the LO at 80 MS/s, -2.7 at 20), a broad bump of up to +3 dB
 within a few hundred kHz of the LO, and a gentle rise towards the edges at 40 and 16 MS/s.
@@ -165,7 +173,8 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``a``   automatic colour floor on / off
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
 ``p``   speed: bursts per row (peak hold), 8 (at start), 4, 2, 1, 32, 16
-``x``   mask the receiver's own steady lines on / off (on at start)
+``x``   the receiver's own lines: masked and bridged (``X``, at start), width
+        filter (``W``), or shown
 ``f``   flatten the receiver's own shape on / off (on at start)
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
 ``m``   fixed gain +1
@@ -235,7 +244,8 @@ Command               Action
 ``$span <MHz>``       1000, 640, 320, 160, 80 (swept), 40, 16, 8, 4 or 2
 ``$gain <n|auto>``    fixed gain table index or AGC
 ``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
-``$hide on|off``      the steady-line mask (display only)
+``$hide <how>``       ``on``: the steady-line mask, ``width``: the width filter,
+                      ``off``: neither
 ``$flat on|off``      the receiver's shape divided out (display only)
 ``$region eu|us``     which band table labels the bands and the number keys
 ``$post on|off``      ``$bins`` frames after the mask, as drawn, instead of before it

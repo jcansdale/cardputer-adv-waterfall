@@ -183,6 +183,7 @@ static struct {
 	bool channels; /* the 2.4 GHz Wi-Fi channel overlay */
 	int peak; /* bursts per row, their per-bin maximum (1: one burst's average) */
 	bool hide_spurs; /* the steady-line mask (mask_update()) */
+	bool width_filter; /* instead: narrow lines clipped, blind (width_filter()) */
 	bool flat; /* the receiver's shape divided out (flat_apply()) */
 	enum esp_sdr_rate rate;
 	int gain; /* ESP_SDR_RX_GAIN_AUTO or a table index */
@@ -482,7 +483,7 @@ static void draw_header(void)
 	}
 	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
-		 st.hide_spurs ? 'X' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
+		 st.hide_spurs ? 'X' : st.width_filter ? 'W' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
 		 (int)st.range_db);
 	if (!st.screen) {
 		snprintf(line, sizeof(line), "SCREEN PAUSED BY HOST");
@@ -827,7 +828,7 @@ static void draw_help(void)
 		"-  =   DARKER/BRIGHTER  A  AUTO",
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
-		"X  MASK STEADY LINES  F  FLATTEN",
+		"X  LINES: MASK/WIDTH/OFF F  FLAT",
 		"V      AUTO-ROTATE (HOLD UPRIGHT)",
 		"RED: TUNING CENTRE  MAGENTA: CLOCKS",
 		"YELLOW WI-FI 1-12  CYAN BLUETOOTH LE",
@@ -1153,7 +1154,7 @@ static void side_header(void)
 		snprintf(gain, sizeof(gain), "G:%d", st.gain);
 	}
 	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c%c", st.view_khz / 1000, st.view_khz % 1000,
-		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.hide_spurs ? 'X' : ' ',
+		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.hide_spurs ? 'X' : st.width_filter ? 'W' : ' ',
 		 st.flat ? 'F' : ' ');
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
 	snprintf(text, sizeof(text), "%s %c%d/%d", gain, st.auto_floor ? 'A' : 'L',
@@ -1534,7 +1535,15 @@ static void handle_key(char k)
 		st.auto_floor = !st.auto_floor;
 		return;
 	case 'x':
-		st.hide_spurs = !st.hide_spurs;
+		/* The mask (X), the width filter (W), neither: to compare. */
+		if (st.hide_spurs) {
+			st.hide_spurs = false;
+			st.width_filter = true;
+		} else if (st.width_filter) {
+			st.width_filter = false;
+		} else {
+			st.hide_spurs = true;
+		}
 		break;
 	case 'f':
 		flat_set(!st.flat);
@@ -2180,6 +2189,87 @@ static void sweep_patch(int lo)
 	spur_bridge(lo);
 }
 
+/*
+ * The width filter (x's second setting, W), blind, to compare with the mask and the measured
+ * spur list: a run of bins standing more than WIDTH_DB above the mean (in dB) of a ring one to
+ * three widths out is a line when that core is no wider than WIDTH_KHZ; it and its skirts
+ * (above WIDTH_SKIRT_DB, up to WIDTH_KHZ either side) are set to that mean. The receiver's
+ * spurs go, steady or not, but so do real narrow signals: NB-IoT and GSM carriers (180,
+ * 200 kHz) and narrower. Wi-Fi, Bluetooth, 4G stand far wider. peak[] holds the dB levels'
+ * running sum.
+ */
+#define WIDTH_KHZ      300
+#define WIDTH_DB       5.0f
+#define WIDTH_SKIRT_DB 1.5f
+static float width_ring(int k, int near, int far)
+{
+	float sum = 0.0f;
+
+	for (int side = -1; side <= 1; side += 2) {
+		int a = k + side * near, b = k + side * far;
+		int lo = MIN(a, b), hi = MAX(a, b);
+
+		if (lo >= 0 && hi < (int)NFFT) {
+			sum += peak[hi] - (lo > 0 ? peak[lo - 1] : 0.0f);
+		} else {
+			for (int j = lo; j <= hi; j++) {
+				unsigned int m = (unsigned int)((j % (int)NFFT + (int)NFFT) % (int)NFFT);
+
+				sum += peak[m] - (m > 0U ? peak[m - 1U] : 0.0f);
+			}
+		}
+	}
+	return sum / (float)(2 * (far - near + 1));
+}
+
+static void width_filter(void)
+{
+	int w = MAX(3, (int)lroundf((float)WIDTH_KHZ * (float)NFFT / (float)fs_khz()));
+	float total = 0.0f;
+
+	for (unsigned int k = 0; k < NFFT; k++) {
+		total += fast_db(psd[k] + 1e-20f);
+		peak[k] = total; /* bins 0 to k */
+	}
+	for (int k = 0; k < (int)NFFT; k++) {
+		float base = width_ring(k, w, 3 * w);
+
+		if (fast_db(psd[k] + 1e-20f) - base <= WIDTH_DB) {
+			continue;
+		}
+		int a = k, b = k;
+
+		/* The core, above WIDTH_DB: narrow or not. */
+		while (b < (int)NFFT - 1 && fast_db(psd[b + 1] + 1e-20f) - base > WIDTH_DB &&
+		       b - a < w) {
+			b++;
+		}
+		if (b - a + 1 > w) {
+			while (b < (int)NFFT - 1 && fast_db(psd[b + 1] + 1e-20f) - base > WIDTH_DB) {
+				b++;
+			}
+			k = b; /* wide: a real signal's */
+			continue;
+		}
+		/* Its skirts, up to w bins either side. */
+		for (int n = 0; n < w && a > 0 && fast_db(psd[a - 1] + 1e-20f) - base > WIDTH_SKIRT_DB;
+		     n++) {
+			a--;
+		}
+		for (int n = 0; n < w && b < (int)NFFT - 1 &&
+				fast_db(psd[b + 1] + 1e-20f) - base > WIDTH_SKIRT_DB;
+		     n++) {
+			b++;
+		}
+		float fill = powf(10.0f, 0.1f * base);
+
+		for (int j = a; j <= b; j++) {
+			psd[j] = fill;
+		}
+		k = b;
+	}
+}
+
 #define SWEEP_STEP_KHZ 32000
 #define SWEEP_SAMPLES  SAMPLES
 static int capture_sweep(void)
@@ -2223,6 +2313,8 @@ static int capture_sweep(void)
 		lo_bridge();
 		if (st.hide_spurs) {
 			sweep_patch(centre);
+		} else if (st.width_filter) {
+			width_filter();
 		}
 
 		float norm = 1.0f / (FULLSCALE * FULLSCALE * window_gain * (float)segments);
@@ -2294,6 +2386,8 @@ static int capture_row(void)
 	/* After the mask, like the LO's bridge: a smooth bridge would look like a line to it. */
 	if (st.hide_spurs) {
 		spur_bridge(lo_khz());
+	} else if (st.width_filter) {
+		width_filter();
 	}
 
 	lo_bridge();
@@ -2387,7 +2481,7 @@ static void print_status(void)
 	con_printf("stat lo %d lo_khz %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
 	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u flat %d\n",
 	       st.lo_mhz, lo_khz(), st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
-	       st.hide_spurs, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
+	       st.hide_spurs ? 1 : st.width_filter ? 2 : 0, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
 	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.region_us ? "us" : "eu", st.orient, st.auto_rotate,
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
 	       (unsigned int)loop_max_ms, st.flat);
@@ -2456,7 +2550,7 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], post on|off, iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
-		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off, flat on|off, region eu|us\n");
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|width|off, flat on|off, region eu|us\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
 	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
@@ -2546,8 +2640,13 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "flat") == 0 && parse_flag(arg, &flag)) {
 		flat_set(flag);
 		con_printf("ok flat %d\n", st.flat);
+	} else if (strcmp(line, "hide") == 0 && strcmp(arg, "width") == 0) {
+		st.hide_spurs = false;
+		st.width_filter = true;
+		con_printf("ok hide width\n");
 	} else if (strcmp(line, "hide") == 0 && parse_flag(arg, &flag)) {
 		st.hide_spurs = flag;
+		st.width_filter = false;
 		con_printf("ok hide %d\n", st.hide_spurs);
 	} else {
 		con_printf("err %s %s (try $help)\n", line, arg);
