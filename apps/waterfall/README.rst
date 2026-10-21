@@ -99,7 +99,7 @@ the LO and its spur off it), so at 4 and 2 MHz most steps do not retune.
 The receiver makes more narrow lines of its own: the board's clock harmonics (multiples of
 the 40 MHz crystal and the 48 MHz USB clock: 2352, 2360, 2400, 2440, 2448, 2496 MHz and
 more), and spurs that move with the LO in ways no formula covers, more of them under
-1842 MHz, some there only now and then. They are all narrow, so ``x`` (on at start, ``W`` in
+1842 MHz, some there only now and then. They are all narrow, so ``x`` (on at start, ``X`` in
 the header) clears narrow lines, blind: in every row, a run of bins more than 4 dB above the
 mean of a ring of bins one to three widths out is cleared, with its skirts, to that mean when
 the run is no wider than 600 kHz (``$width <kHz> <dB>`` to experiment; under 1842 MHz the
@@ -166,7 +166,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``a``   automatic colour floor on / off
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
 ``p``   speed: bursts per row (peak hold), 8 (at start), 4, 2, 1, 32, 16
-``x``   clear narrow lines, the receiver's own among them (``W``, on at start)
+``x``   clear narrow lines, the receiver's own among them (``X``, on at start)
 ``f``   flatten the receiver's own shape on / off (on at start)
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
 ``m``   fixed gain +1

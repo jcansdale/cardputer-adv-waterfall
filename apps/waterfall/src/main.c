@@ -472,7 +472,7 @@ static void draw_header(void)
 	}
 	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
-		 st.width_filter ? 'W' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
+		 st.width_filter ? 'X' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
 		 (int)st.range_db);
 	if (!st.screen) {
 		snprintf(line, sizeof(line), "SCREEN PAUSED BY HOST");
@@ -1150,7 +1150,7 @@ static void side_header(void)
 		snprintf(gain, sizeof(gain), "G:%d", st.gain);
 	}
 	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c%c", st.view_khz / 1000, st.view_khz % 1000,
-		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.width_filter ? 'W' : ' ',
+		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.width_filter ? 'X' : ' ',
 		 st.flat ? 'F' : ' ');
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
 	snprintf(text, sizeof(text), "%s %c%d/%d", gain, st.auto_floor ? 'A' : 'L',
@@ -1969,7 +1969,7 @@ static void lo_bridge(void)
 static void commit_row(float sum, unsigned int valid);
 
 /*
- * The width filter (x, W in the header): the receiver's own lines are all narrow (its clock
+ * The width filter (x, X in the header): the receiver's own lines are all narrow (its clock
  * harmonics, spurs that move with the LO in ways no formula covers, more of them under
  * 1842 MHz), so, blind: a run of bins standing more than width_db above the mean (in dB) of
  * a ring one to three widths out is a line when that core is no wider than width_khz; it and
