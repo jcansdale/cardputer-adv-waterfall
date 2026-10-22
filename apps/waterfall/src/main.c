@@ -17,6 +17,7 @@
  *   - =   darker / brighter (floor +2 / -2 dB)    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  *   x     the receiver's own narrow lines cleared (width_filter()) on/off
+ *   r     band labels and number keys: Europe/UK or US
  *   v     auto-rotate on/off: held upright, the portrait layout, scrolled by the panel
  *
  * The USB console takes the same keys, and lines starting with $ as commands for a host
@@ -816,7 +817,7 @@ static void draw_help(void)
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
 		"X      NARROW LINES   F  FLAT",
-		"V      AUTO-ROTATE (HOLD UPRIGHT)",
+		"V      AUTO-ROTATE  R  EU/US BANDS",
 		"RED: TUNING CENTRE",
 		"YELLOW WI-FI 1-12  CYAN BLUETOOTH LE",
 		"ORANGE MAST  BLUE USER  VIOLET TDD",
@@ -1542,6 +1543,10 @@ static void handle_key(char k)
 		return;
 	case 'v':
 		st.auto_rotate = !st.auto_rotate;
+		return;
+	case 'r': /* the band table: Europe/UK or US */
+		st.region_us = !st.region_us;
+		st.side_dirty = true;
 		return;
 	case 'g':
 		st.gain = ESP_SDR_RX_GAIN_AUTO;

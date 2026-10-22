@@ -215,6 +215,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``m``   fixed gain +1
 ``g``   AGC
 ``v``   automatic portrait layout when held upright on / off
+``r``   band table: Europe/UK (at start) or US
 ======  ===========================================
 
 Wi-Fi channels 1 to 12 are always labelled at the top of the spectrum trace, each number
@@ -233,7 +234,7 @@ where both take turns (TDD, ``4G/5G`` for B40 and B38), pink DECT, grey satellit
 (the band mostly off the screen) its short code shows instead, for example ``B1 DL``. The number keys jump to the bands' centres, in order:
 
 ===  ==================================  ==================================
-Key  Europe/UK (default)                 US (``$region us``)
+Key  Europe/UK (default)                 US (``r`` or ``$region us``)
 ===  ==================================  ==================================
 1    B3 DL, 4G masts, 1805-1880          B25 UL, phones, 1850-1915
 2    DECT cordless phones, 1880-1900     DECT 6.0, 1920-1930
