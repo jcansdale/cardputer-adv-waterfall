@@ -13,8 +13,9 @@
  *   , /   scroll left / right        ; .   span 80/40/16/8/4/2 MHz narrower / wider
  *   h     back to 2440 MHz, 16 MHz span
  *   w     Wi-Fi channel overlay on/off
- *   p     bursts per row (peak hold): 8 4 2 1 32 16, faster to the right, then slower
- *   - =   darker / brighter (floor +2 / -2 dB)    [ ]   colour range -5 / +5 dB
+ *   [ ]   slower / faster: bursts per redraw (peak hold) 1 2 4 8 16 32, split over the
+ *         zoom's rows
+ *   - =   darker / brighter (floor +2 / -2 dB)    k l   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  *   x     the receiver's own narrow lines cleared (width_filter()) on/off
  *   r     band labels and number keys: Europe/UK or US
@@ -814,8 +815,8 @@ static void draw_help(void)
 		"H  HOME     1-9 0  JUMP TO BANDS",
 		"N  M   GAIN -/+       G  AGC",
 		"-  =   DARKER/BRIGHTER  A  AUTO",
-		"[  ]   COLOUR RANGE   W  CH. LINES",
-		"P      SPEED: PEAK OF 8,4,2,1,32,16",
+		"K  L   COLOUR RANGE   W  CH. LINES",
+		"[  ]   SLOWER/FASTER (PEAK HOLD)",
 		"X      NARROW LINES   F  FLAT",
 		"V      AUTO-ROTATE  R  EU/US BANDS",
 		"RED: TUNING CENTRE",
@@ -1511,9 +1512,11 @@ static void handle_key(char k)
 		st.view_khz = FREQ_DEFAULT_MHZ * 1000;
 		set_span(SPAN_HOME);
 		break;
-	case 'p':
-		/* Halve: faster, steadier rows lost; from 1 back to the slowest. */
-		st.peak = st.peak > 1 ? st.peak / 2 : PEAK_MAX;
+	case '[': /* slower: twice the bursts per redraw, more peak hold */
+		st.peak = MIN(st.peak * 2, PEAK_MAX);
+		return;
+	case ']': /* faster: half the bursts */
+		st.peak = MAX(st.peak / 2, 1);
 		return;
 	case '-': /* darker: the floor up */
 		st.auto_floor = false;
@@ -1523,10 +1526,10 @@ static void handle_key(char k)
 		st.auto_floor = false;
 		st.floor_db -= 2.0f;
 		return;
-	case '[':
+	case 'k': /* narrower colour range: more contrast */
 		st.range_db = MAX(st.range_db - 5.0f, 10.0f);
 		return;
-	case ']':
+	case 'l': /* wider */
 		st.range_db = MIN(st.range_db + 5.0f, 90.0f);
 		return;
 	case 'a':

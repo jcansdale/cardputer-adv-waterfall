@@ -74,7 +74,7 @@ runs at 80 MHz SPI (above the ST7789's rated 62.5 MHz writes, but clean here), s
 redraw takes about 6.5 ms, and landscape redraws after every row: redrawn at a frame rate, the
 waterfall stepped by one row or two at a time, unevenly, which shimmered. At 16 MHz that is
 about 21 rows a second with peak hold (``P8``) and 37 with one burst a row (``P1``); the table
-under ``p`` has the rest.
+under ``[`` and ``]`` has the rest.
 
 Held upright (either edge down, past about 60 degrees; back to landscape within about 30 degrees
 of upright, so it does not flip back and forth), the BMI270 accelerometer switches to a portrait
@@ -93,9 +93,10 @@ rotation (left and right still scroll, up and down still step the span as seen o
    Held upright: the same view in portrait, with twice the history.
 
 Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by default
-each row is the per-bin maximum over 8 bursts (peak hold, ``P8`` in the header). ``p`` sets
-the speed: each press halves the bursts per row, 8, 4, 2, 1 (one burst's plain average), then
-wraps round to the slow end, 32 and 16. Fewer bursts scroll faster but miss more of short
+each row is the per-bin maximum over 8 bursts (peak hold, ``P8`` in the header). ``[`` and
+``]`` set the speed: ``]`` halves the bursts per redraw, down to 1 (one burst's plain
+average), ``[`` doubles them, up to 32. Zoomed in, a redraw's bursts are shared over its 2, 4
+or 8 rows (``P8`` at 2 MHz: 8 rows of one burst each). Fewer bursts scroll faster but miss more of short
 bursts; 16 and 32 catch more and hold more seconds of history. Rows a second at 16 MHz, in
 landscape (portrait is faster, the waterfall scrolling in hardware):
 
@@ -157,7 +158,7 @@ and 42 the background is then flat within 0.4 dB (1 MHz averages) where it varie
    :width: 100%
 
    ``f`` on (left) and off (right), 40 MHz at 2050 MHz, a quiet stretch, the colour range
-   narrowed to 20 dB (``[``): without it the bump around the tuning centre shows as a brighter
+   narrowed to 20 dB (``k``): without it the bump around the tuning centre shows as a brighter
    band.
 
 The 40 MHz span stays one capture: swept in two halves, a burst that began or ended between
@@ -205,11 +206,12 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``1``   to ``9`` and ``0``: jump to a band (table below)
 ``-``   darker: colour floor +2 dB (manual)
 ``=``   brighter (``+``): colour floor -2 dB (manual)
-``[``   colour range -5 dB
-``]``   colour range +5 dB
+``k``   colour range -5 dB (more contrast)
+``l``   colour range +5 dB
 ``a``   automatic colour floor on / off
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
-``p``   speed: bursts per row (peak hold), 8 (at start), 4, 2, 1, 32, 16
+``[``   slower: twice the bursts per redraw (peak hold), up to 32 (8 at start)
+``]``   faster: half the bursts, down to 1
 ``x``   clear narrow lines, the receiver's own among them (``X``, on at start)
 ``f``   flatten the receiver's own shape on / off (on at start)
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
