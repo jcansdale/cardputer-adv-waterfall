@@ -129,6 +129,9 @@ static const struct {
 };
 #define SPAN_HOME 6 /* 16 MHz */
 static bool sweeping(void);
+static bool lagging(void);
+static unsigned int row_bursts;
+static size_t row_samples;
 static bool input_waiting(void);
 static float screen_s(void);
 static void fmt_secs(char *buf, size_t len, float s);
@@ -1532,8 +1535,10 @@ static void handle_key(char k)
 	case '[': /* slower: twice a row's time, more peak hold */
 		st.speed = MIN(st.speed + 1, SPEED_MAX);
 		return;
-	case ']': /* faster */
-		st.speed = MAX(st.speed - 1, SPEED_MIN);
+	case ']': /* faster, unless the rows are late at the least work already: the limit */
+		if (!(lagging() && row_bursts == 1U && row_samples == SAMPLES / 4U)) {
+			st.speed = MAX(st.speed - 1, SPEED_MIN);
+		}
 		return;
 	case '-': /* darker: the floor up */
 		st.auto_floor = false;
@@ -2011,10 +2016,17 @@ static int64_t row_begin(void)
 		row_end_us = t; /* after input: the next row starts afresh */
 	}
 	row_hurry = false;
-	if (row_end_us < t - (int64_t)budget) {
-		row_end_us = t; /* fallen behind (or new): no catching up */
+	/*
+	 * The deadline follows the last one, so the rows keep the budget on average, the
+	 * drawing between them made up. A row starting after its deadline takes the fewest
+	 * bursts; more than a budget behind, the time is written off (no burst of fast rows).
+	 */
+	int64_t end = row_end_us + (int64_t)budget;
+
+	if (end < t - (int64_t)budget) {
+		end = t;
 	}
-	row_end_us += (int64_t)budget;
+	row_end_us = end;
 	return t;
 }
 
@@ -2022,6 +2034,8 @@ static int64_t row_begin(void)
 static int peak_until(int64_t end_us, size_t samples)
 {
 	int segments = 0;
+
+	row_samples = samples;
 	int64_t check = now_us() + 20000;
 
 	row_bursts = 0;
@@ -2047,12 +2061,6 @@ static int peak_until(int64_t end_us, size_t samples)
 		}
 	} while (now_us() < end_us && !row_hurry);
 	return segments;
-}
-
-/* A row's spacing in us: the budget, or more when the rows can't keep to it. */
-static float row_period_us(void)
-{
-	return MAX(row_budget_us(), t_period_us);
 }
 
 /*
@@ -2259,7 +2267,7 @@ static int capture_sweep(void)
 	unsigned int valid = 0;
 	/* The row's time shared out over the steps, each at least a burst. */
 	int64_t t0 = row_begin(), end = row_end_us;
-	size_t samples = burst_samples((float)(end - t0) / (float)n);
+	size_t samples = burst_samples(row_budget_us() / (float)n);
 
 	for (unsigned int c = 0; c < W; c++) {
 		row_db[c] = FLOOR_DB;
@@ -2317,8 +2325,9 @@ static int capture_sweep(void)
 
 static int capture_row(void)
 {
-	int64_t t0 = row_begin();
-	int segments = peak_until(row_end_us, burst_samples((float)(row_end_us - t0)));
+	(void)row_begin();
+	/* The burst's size from the budget, not the time left: every row alike. */
+	int segments = peak_until(row_end_us, burst_samples(row_budget_us()));
 	unsigned int bursts = row_bursts;
 
 	if (segments < 0) {
@@ -2751,8 +2760,9 @@ int main(void)
 		 * LAND_MS (up to 8, the screen keeping up), so the waterfall moves in even steps.
 		 */
 		static unsigned int land_rows;
+		/* From the budget, not the measured spacing: lagging rows drew more often, lagging more. */
 		unsigned int batch = (unsigned int)CLAMP(
-			lroundf((float)LAND_MS * 1000.0f / row_period_us() + 0.49f), 1L, 8L);
+			lroundf((float)LAND_MS * 1000.0f / row_budget_us() + 0.49f), 1L, 8L);
 
 		land_rows++;
 		bool draw = input || now - last_draw_ms >= FRAME_MS ||
@@ -2828,10 +2838,10 @@ int main(void)
 
 		if (now - last_ms >= 5000U && st.text) {
 			con_printf("waterfall: LO %d MHz, view %d kHz x%d, %u rows/s, floor %d dB, "
-			       "gain %d\n",
+			       "gain %d, %u bursts of %u a row\n",
 			       st.lo_mhz, st.view_khz, st.zoom,
 			       (unsigned int)(rows * 1000U / (now - last_ms)), (int)st.floor_db,
-			       st.gain);
+			       st.gain, row_bursts, (unsigned int)row_samples);
 			rows = 0;
 			last_ms = now;
 		}

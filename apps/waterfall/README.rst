@@ -95,8 +95,9 @@ or a console command ends a slow row early, so input never waits for one.
 
 The top line shows the view's centre frequency, span, the time the waterfall covers at the
 speed set (``4.0s``; ``m`` minutes, ``h`` hours; ``>4.0s`` when the rows can't keep up, the
-fewest bursts or the drawing taking longer: at the fastest settings, 2 MHz and the wide
-sweeps, where ``]`` makes it no faster), ``X`` and ``F`` when on (portrait: on the second
+fewest bursts or the drawing taking longer; ``]`` stops where the rows are late at a single
+burst of 1024 samples, as fast as the span goes: 140 rows a second at 16 MHz, 135 at 2 MHz,
+6 in the 1000 MHz sweep, in landscape), ``X`` and ``F`` when on (portrait: on the second
 line), gain,
 colour scale and band table (``EU`` or ``US``); under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
@@ -202,7 +203,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
 ``[``   slower: twice a row's time, more peak hold (a 16 MHz screenful 4 s at start), up to
         about an hour
-``]``   faster: half the time, down to 0.125 s
+``]``   faster: half the time, down to the fastest the span allows (0.125 s at most)
 ``x``   clear narrow lines, the receiver's own among them (``X``, on at start)
 ``f``   flatten the receiver's own shape on / off (on at start)
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
