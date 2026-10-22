@@ -1869,11 +1869,14 @@ static void fft_check(void)
  * follows clipping). At a fixed gain it matched in every burst checked, but a burst taken
  * at another gain (or, with the AGC, one where it changed) would smear the row: taken again,
  * up to twice, then kept so the screen never stalls. A sample at full scale (+-511) means the
- * ADC clipped: OVL in the header (ovl_ms).
+ * ADC clipped, which splatters across the whole span, a bright line through the row: the
+ * burst is taken again the same way (a strong packet's, 15 to 25 us of it, seldom the next
+ * one too), and OVL shows in the header (ovl_ms).
  */
 #define BURST_TRIES 3
 #define OVL_MS      1000U
-static uint32_t gain_retakes, ovl_ms;
+static uint32_t gain_retakes, clip_retakes, ovl_ms;
+static bool clip_drop = true; /* $clip drop|keep */
 
 static bool overloaded(void)
 {
@@ -1893,12 +1896,21 @@ static bool burst_gain_ok(const struct esp_sdr_rx_burst *b)
 						: g0 == (unsigned int)st.gain && g1 == g0;
 }
 
+static bool burst_clipped(const struct esp_sdr_rx_burst *b)
+{
+	for (size_t j = 0; j < b->count; j++) {
+		if (abs(esp_sdr_rx_i(b->words[j])) >= 511 || abs(esp_sdr_rx_q(b->words[j])) >= 511) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static int capture_psd_n(size_t count)
 {
 	struct esp_sdr_rx_burst b;
 	unsigned int segments;
 	float dc_i = 0.0f, dc_q = 0.0f;
-	int peak_iq = 0;
 	int ret;
 
 	for (int t = 0;; t++) {
@@ -1906,23 +1918,27 @@ static int capture_psd_n(size_t count)
 		if (ret != 0) {
 			return ret;
 		}
-		if (b.count == 0U || burst_gain_ok(&b) || t == BURST_TRIES - 1) {
+		if (b.count == 0U) {
 			break;
 		}
-		gain_retakes++;
+		bool gain_ok = burst_gain_ok(&b), clipped = burst_clipped(&b);
+
+		if (clipped) {
+			ovl_ms = k_uptime_get_32();
+		}
+		clipped = clipped && clip_drop;
+		if ((gain_ok && !clipped) || t == BURST_TRIES - 1) {
+			break;
+		}
+		gain_retakes += !gain_ok;
+		clip_retakes += clipped;
 	}
 	if (st.iq_left != 0) {
 		send_iq(&b);
 	}
 	for (size_t j = 0; j < b.count; j++) {
-		int i = esp_sdr_rx_i(b.words[j]), q = esp_sdr_rx_q(b.words[j]);
-
-		dc_i += (float)i;
-		dc_q += (float)q;
-		peak_iq = MAX(peak_iq, MAX(abs(i), abs(q)));
-	}
-	if (peak_iq >= 511) {
-		ovl_ms = k_uptime_get_32();
+		dc_i += (float)esp_sdr_rx_i(b.words[j]);
+		dc_q += (float)esp_sdr_rx_q(b.words[j]);
 	}
 	dc_i /= (float)b.count;
 	dc_q /= (float)b.count;
@@ -2320,12 +2336,12 @@ static uint32_t loop_max_ms;
 static void print_status(void)
 {
 	con_printf("stat lo %d lo_khz %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
-	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u flat %d retakes %u ovl %d\n",
+	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u flat %d retakes %u clips %u ovl %d\n",
 	       st.lo_mhz, lo_khz(), st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
 	       st.width_filter, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
 	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.region_us ? "us" : "eu", st.orient, st.auto_rotate,
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
-	       (unsigned int)loop_max_ms, st.flat, (unsigned int)gain_retakes, overloaded());
+	       (unsigned int)loop_max_ms, st.flat, (unsigned int)gain_retakes, (unsigned int)clip_retakes, overloaded());
 	loop_max_ms = 0U;
 
 }
@@ -2391,7 +2407,7 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], post on|off, iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
-		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off, width <kHz> [dB], shot, flat on|off, region eu|us\n");
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off, width <kHz> [dB], clip drop|keep, shot, flat on|off, region eu|us\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
 	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
@@ -2492,6 +2508,9 @@ static void handle_cmd(char *line)
 		width_db = CLAMP(db, 1.0f, 20.0f);
 		con_printf("ok width %d %d.%d\n", width_khz, (int)width_db,
 			   (int)(10.0f * width_db) % 10);
+	} else if (strcmp(line, "clip") == 0 && (strcmp(arg, "drop") == 0 || strcmp(arg, "keep") == 0)) {
+		clip_drop = arg[0] == 'd';
+		con_printf("ok clip %s\n", arg);
 	} else if (strcmp(line, "shot") == 0) {
 		/* The screen as drawn, at the next redraw (shot_end()). */
 		st.shot_req = st.screen;

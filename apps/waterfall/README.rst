@@ -72,7 +72,11 @@ Each sample the radio dumps also carries the gain it was taken at (bits 26 to 20
 word, as `ESPARGOS found <https://espargos.net/espsdr/>`_). A burst taken at another gain
 than the one set, or with the AGC one where it changed part way (about 30 a second at
 2440 MHz), is taken again, up to twice (``retakes`` in ``$status``); at a fixed gain none
-has needed it, the gain being set before every capture.
+has needed it, the gain being set before every capture. A burst where a sample hit full scale
+is taken again the same way: the ADC clipped, which splatters a bright line across the whole
+row. Clipping comes from single strong packets (15 to 25 us of a burst, seldom two bursts in a
+row), so the next burst is usually clean: at gain 70 the rows lifted more than 10 dB across
+the span fell from 10% to 3%. ``OVL`` still shows; ``$clip keep`` keeps them, to compare.
 
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
 FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. The display
@@ -294,6 +298,7 @@ Command               Action
 ``$region eu|us``     which band table labels the bands and the number keys
 ``$post on|off``      ``$bins`` frames as drawn, instead of as captured
 ``$shot``             the screen as drawn, as frames (``wf_serial.py shot``)
+``$clip drop|keep``   bursts that clipped taken again (default) or kept
 ``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
                       ``right`` (that edge down, portrait)
 ====================  ===========================================================
