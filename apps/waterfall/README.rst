@@ -34,10 +34,10 @@ tuned to 2393), which is why 16 and 8 MHz are captured at 40 MS/s (39 kHz bins, 
 pixels' width at 8 MHz) and 4 and 2 MHz keep to the middle of their capture. At 40 MS/s the
 filters' slow roll-off past +-18 MHz does the same at the edges (a mast at 2675 MHz showed at
 2635 when tuned to 2655), so 40 MHz is captured at 80 MS/s; each pixel takes the strongest bin under it. Below 16 MHz, time resolution
-grows with the frequency resolution: the peak hold's bursts are shared over 2, 4 or 8 rows
-instead of one (8 at 16 MHz, 1 each at 2 MHz), so the waterfall scrolls faster with more
-detail. Landscape redraws after every row, or after up to that many when they come quicker
-than 50 ms, so slowed right down it still moves a row at a time.
+grows with the frequency resolution: a row gets the share of the 16 MHz row's time its span
+is (half at 8 MHz, an eighth at 2), so the waterfall scrolls faster with more detail.
+Landscape redraws after every row, or after a fixed few when they come quicker than 50 ms,
+so it moves in even steps however slow.
 Scrolling past the captured span retunes the radio, and the waterfall history is shifted and
 rescaled to stay lined up.
 
@@ -48,18 +48,11 @@ plan shows at a glance (the band names fit). The library waits 3 ms after every 
 default; after a reset, captures right after a 40 MHz hop matched settled ones with no wait at
 all (passband within 0.15 dB, clock harmonics 0.5 dB), but after some power-ons the first 500 us or so
 make spurs up to +32 dB, smeared over several bins, so the app sets 1 ms
-(``esp_sdr_set_retune_settle()``). The P
-bursts of a row are shared out over the steps (at least one each), so a row is as much work
-as elsewhere and the scroll speed falls smoothly with the width (rows a second):
-
-==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
-Span (MHz)  1000  640  320  160   80   40   16    8    4    2
-==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
-``P8``         4    7   12   15   18   22   22   41   67   92
-``P1``         4    7   12   19   25   37   38   63   84   92
-==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
-
-At 320 MHz and wider a step gets one burst, so short bursts are often missed there.
+(``esp_sdr_set_retune_settle()``). A sweep's row gets the 16 MHz row's time, shared over its
+steps, at least a burst each, so at the speed at start a screenful covers 4 s at 80 and
+160 MHz as at 16, and the 1000 MHz sweep, at one burst a step, about 15 s (6 or 7 rows a
+second at most; 320 MHz 16 to 22). At 320 MHz and wider a step gets one burst unless slowed
+down (``[``), so short bursts are often missed there.
 ``$settle`` changes the wait after each retune, for experiments.
 
 .. figure:: ../../apps/waterfall/doc/sweep.png
@@ -73,17 +66,14 @@ The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked agains
 FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. The display
 runs at 80 MHz SPI (above the ST7789's rated 62.5 MHz writes, but clean here), so a whole
 redraw takes about 6.5 ms, and landscape redraws after every row: redrawn at a frame rate, the
-waterfall stepped by one row or two at a time, unevenly, which shimmered. At 16 MHz that is
-about 21 rows a second with peak hold (``P8``) and 37 with one burst a row (``P1``); the table
-under ``[`` and ``]`` has the rest.
+waterfall stepped by one row or two at a time, unevenly, which shimmered.
 
 Held upright (either edge down, past about 60 degrees; back to landscape within about 30 degrees
 of upright, so it does not flip back and forth), the BMI270 accelerometer switches to a portrait
 layout laid out as the landscape one: the settings on two lines, the scale, and the trace with
 the Wi-Fi and Bluetooth LE labels on top, the waterfall under them with the newest row at the
 top. The panel scrolls the waterfall in hardware, so a new row costs one 135-pixel column
-instead of a redraw: about 36 rows a second at ``P8`` and 149 at ``P1``, against 22 and 38 in
-landscape. The arrow keys follow the
+instead of a redraw: at the fastest about 175 rows a second, against 120 to 135 in landscape. The arrow keys follow the
 rotation (left and right still scroll, up and down still step the span as seen on the screen);
 ``v`` turns the automatic rotation off and on. The key list stays in landscape.
 
@@ -93,25 +83,19 @@ rotation (left and right still scroll, up and down still step the span as seen o
 
    Held upright: the same view in portrait, with twice the history.
 
-Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by default
-each row is the per-bin maximum over 8 bursts (peak hold, ``P8``: ``peak`` in ``$status``). ``[`` and
-``]`` set the speed: ``]`` halves the bursts per redraw, down to 1 (one burst's plain
-average), ``[`` doubles them, up to 256 (a sweep shares them over its steps, 32 at 1000 MHz:
-up to P32 one burst each). Zoomed in, a redraw's bursts are shared over its 2, 4
-or 8 rows (``P8`` at 2 MHz: 8 rows of one burst each). Fewer bursts scroll faster but miss more of short
-bursts; 16 and 32 catch more and hold more seconds of history. Rows a second at 16 MHz, in
-landscape (portrait is faster, the waterfall scrolling in hardware):
+Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so each row is the
+per-bin maximum of as many bursts as fit in its time (peak hold). ``[`` and ``]`` set that
+time: at start a screenful of the 16 MHz view covers 4 s (``4.0s`` in the header: 86 rows of
+46 ms, about 16 bursts each), and each press doubles or halves it, from 0.125 s to about an
+hour (``$speed -5`` to ``10``). Narrower views take their share of it and the sweeps the
+16 MHz row's, as above. Rows are paced to their time, the drawing taken out of it; when even
+the fewest bursts take longer, the rows come as fast as they can, and below a full burst's
+time (4096 samples, about 2.9 ms) bursts are 2048 or 1024 samples, faster but noisier. A key
+or a console command ends a slow row early, so input never waits for one.
 
-==========  ===  ===  ===  ===  ===  ===
-Bursts       32   16    8    4    2    1
-==========  ===  ===  ===  ===  ===  ===
-Landscape     8   14   21   28   33   37
-Portrait     10   19   36   59   93  149
-==========  ===  ===  ===  ===  ===  ===
-
-The top line shows the view's centre frequency, span, the time the waterfall covers (``4.1s``:
-predicted from the settings and the parts' times as measured, so it changes as soon as ``[``,
-``]`` or the span do), ``X`` and ``F`` when on, gain,
+The top line shows the view's centre frequency, span, the time the waterfall covers (``4.1s``;
+``m`` minutes, ``h`` hours: the speed's, or as measured when the rows can't keep up), ``X``
+and ``F`` when on, gain,
 colour scale and band table (``EU`` or ``US``); under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
 fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
@@ -214,8 +198,9 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``l``   colour range +5 dB
 ``a``   automatic colour floor on / off
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
-``[``   slower: twice the bursts per redraw (peak hold), up to 256 (8 at start)
-``]``   faster: half the bursts, down to 1
+``[``   slower: twice a row's time, more peak hold (a 16 MHz screenful 4 s at start), up to
+        about an hour
+``]``   faster: half the time, down to 0.125 s
 ``x``   clear narrow lines, the receiver's own among them (``X``, on at start)
 ``f``   flatten the receiver's own shape on / off (on at start)
 ``n``   gain -1 (default fixed 42; AGC hides bursty Wi-Fi)
@@ -275,7 +260,7 @@ answers with one ``ok <command> ...`` or ``err <command> ...`` line (``stat ...`
 Command               Action
 ====================  ===========================================================
 ``$help``             list the commands
-``$status``           the state: LO, view, span, rate, zoom, gain, peak hold, the
+``$status``           the state: LO, view, span, rate, zoom, gain, speed, the
                       orientation and accelerometer (0.1 m/s^2), ...,
                       and the main loop's longest pass since the last ``$status``
 ``$bins [n|on|off]``  send the next n rows' (default 1) full 1024-bin spectra
@@ -286,7 +271,7 @@ Command               Action
 ``$lo <MHz>``         the LO alone, the view staying put when it fits
 ``$span <MHz>``       1000, 640, 320, 160, 80 (swept), 40, 16, 8, 4 or 2
 ``$gain <n|auto>``    fixed gain table index or AGC
-``$peak <n|on|off>``  bursts per redraw: a power of 2, 1 to 256 (on: 8, off: 1)
+``$speed <n>``        a 16 MHz screenful 4 s x 2^n, -5 to 10 (0 at start)
 ``$hide on|off``      the width filter (``x``)
 ``$width <k> <dB>``   the width filter's widest line (kHz) and threshold (600 4)
 ``$flat on|off``      the receiver's shape divided out (display only)

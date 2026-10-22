@@ -43,7 +43,7 @@ def measure(link, gains, frames=6, frames_extra=4, out=print):
     from wf_serial import FRAME_BINS, bins_db
 
     res = {}
-    link.command("$peak 1")
+    link.command("$speed -4")  # about one burst a row
     for span in SPANS:
         link.command(f"$span {span}")
         for g in gains:
@@ -177,7 +177,7 @@ def main():
             # back as found
             st = dict(zip(status.split()[1::2], status.split()[2::2]))
             gain = st["gain"] if int(st["gain"]) >= 0 else "auto"
-            for line in (f"$peak {st['peak']}", f"$gain {gain}",
+            for line in (f"$speed {st['speed']}", f"$gain {gain}",
                          f"$span {int(st['span']) // 1000}", f"$tune {st['view']}"):
                 try:
                     link.command(line)
