@@ -2049,16 +2049,32 @@ static int peak_until(int64_t end_us, size_t samples)
 	return segments;
 }
 
-/* A row's spacing in us: the budget, or more when the rows can't keep to it. */
+/*
+ * A row's spacing in us: the budget while the rows keep within 15% of it (the measured
+ * spacing jitters a little), or as measured when they can't keep up.
+ */
 static float row_period_us(void)
 {
-	return MAX(row_budget_us(), t_period_us);
+	float b = row_budget_us();
+
+	return t_period_us > 1.15f * b ? t_period_us : b;
 }
 
-/* Seconds, the waterfall's rows (WF_H landscape, SIDE_COLS portrait). */
+/*
+ * Seconds, the waterfall's rows (WF_H landscape, SIDE_COLS portrait), for the header: held
+ * until it moves by 5% (a measured one wanders), at once when the budget does.
+ */
 static float screen_s(void)
 {
-	return (float)(st.orient != ORIENT_LANDSCAPE ? SIDE_COLS : WF_H) * row_period_us() * 1e-6f;
+	static float shown, budget;
+	float v = (float)(st.orient != ORIENT_LANDSCAPE ? SIDE_COLS : WF_H) * row_period_us() *
+		  1e-6f;
+
+	if (row_budget_us() != budget || fabsf(v - shown) > 0.05f * shown) {
+		budget = row_budget_us();
+		shown = v;
+	}
+	return shown;
 }
 
 /* "4.1s", "22s", "1.7m", "17m", "1.1h": @p s seconds in four characters. */
