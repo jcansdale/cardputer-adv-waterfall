@@ -164,6 +164,7 @@ static uint16_t rev[NFFT];
 static bool use_dsp;
 static void flat_set(bool on);
 static bool overloaded(void);
+static uint16_t ovl_color(void);
 static bool clip_drop = true; /* bursts that clipped taken again (c, $clip) */
 static void shot_rect(unsigned int x, unsigned int y, unsigned int w, unsigned int h,
 		      const uint16_t *buf);
@@ -485,6 +486,9 @@ static void draw_header(void)
 		fb[k] = bg;
 	}
 	draw_text(fb, 2, 1, line, fg);
+	if (st.screen && overloaded() && strstr(line, "OVL") != NULL) {
+		draw_text(fb, 2 + 6 * (unsigned int)(strstr(line, "OVL") - line), 1, "OVL", ovl_color());
+	}
 	blit(0, HDR_H);
 }
 
@@ -1169,6 +1173,10 @@ static void side_header(void)
 		 (int)st.floor_db, (int)st.range_db,
 		 overloaded() ? "OVL" : st.region_us ? "US" : "EU");
 	draw_text_w(pbuf, PH, 2, 11, text, RGB565(255, 255, 255));
+	if (overloaded() && strstr(text, "OVL") != NULL) {
+		draw_text_w(pbuf, PH, 2 + 6 * (unsigned int)(strstr(text, "OVL") - text), 11, "OVL",
+			    ovl_color());
+	}
 	blit_strip(0, P_HDR_H);
 }
 
@@ -1673,7 +1681,7 @@ static bool con_write(const void *data, size_t len)
 
 static void con_printf(const char *fmt, ...)
 {
-	char line[256];
+	static char line[512]; /* the status line passed 256 */
 	va_list ap;
 	int n;
 
@@ -1874,13 +1882,23 @@ static void fft_check(void)
  * follows clipping). At a fixed gain it matched in every burst checked, but a burst taken
  * at another gain (or, with the AGC, one where it changed) would smear the row: taken again,
  * up to twice, then kept so the screen never stalls. A sample at full scale (+-511) means the
- * ADC clipped, which splatters across the whole span, a bright line through the row: the
- * burst is taken again the same way (a strong packet's, 15 to 25 us of it, seldom the next
- * one too), and OVL shows in the header (ovl_ms).
+ * ADC clipped, which splatters across the whole span, a bright line through the row: such a
+ * burst is left out of the row's peak hold for another, a few ms later (taken again at once
+ * it mostly fell in the same strong packet: a third were kept), up to CLIP_EXTRA a row
+ * (peak_bursts()). OVL in the header: yellow when one was left out, red when one was kept.
  */
+#define CLIP_EXTRA 2
 #define BURST_TRIES 3
 #define OVL_MS      1000U
-static uint32_t gain_retakes, clip_retakes, ovl_ms;
+static uint32_t gain_retakes, clip_retakes, clip_kept, ovl_ms, ovl_kept_ms;
+static bool last_clipped; /* the last capture_psd_n()'s burst hit full scale */
+
+/* OVL yellow: clipping seen, the burst taken again; red: a burst that clipped was kept. */
+static uint16_t ovl_color(void)
+{
+	return ovl_kept_ms != 0U && k_uptime_get_32() - ovl_kept_ms < OVL_MS ? RGB565(255, 60, 60)
+									    : RGB565(255, 220, 0);
+}
 
 static bool overloaded(void)
 {
@@ -1922,20 +1940,14 @@ static int capture_psd_n(size_t count)
 		if (ret != 0) {
 			return ret;
 		}
-		if (b.count == 0U) {
+		if (b.count == 0U || burst_gain_ok(&b) || t == BURST_TRIES - 1) {
 			break;
 		}
-		bool gain_ok = burst_gain_ok(&b), clipped = burst_clipped(&b);
-
-		if (clipped) {
-			ovl_ms = k_uptime_get_32();
-		}
-		clipped = clipped && clip_drop;
-		if ((gain_ok && !clipped) || t == BURST_TRIES - 1) {
-			break;
-		}
-		gain_retakes += !gain_ok;
-		clip_retakes += clipped;
+		gain_retakes++;
+	}
+	last_clipped = b.count > 0U && burst_clipped(&b);
+	if (last_clipped) {
+		ovl_ms = k_uptime_get_32();
 	}
 	if (st.iq_left != 0) {
 		send_iq(&b);
@@ -1978,9 +1990,40 @@ static int capture_psd_n(size_t count)
 	return (int)segments;
 }
 
-static int capture_psd(void)
+/* @p bursts bursts' per-bin maximum into peak[], those that clipped left out (clip_drop). */
+static int peak_bursts(unsigned int bursts, size_t samples)
 {
-	return capture_psd_n(SAMPLES);
+	unsigned int got = 0, extra = 0;
+	int segments = 0;
+
+	while (got < bursts) {
+		int ret = capture_psd_n(samples);
+
+		if (ret < 0) {
+			return ret;
+		}
+		segments = ret;
+		if (last_clipped && clip_drop) {
+			if (extra < CLIP_EXTRA) {
+				extra++;
+				clip_retakes++;
+				continue;
+			}
+			ovl_kept_ms = k_uptime_get_32();
+			clip_kept++;
+		} else if (last_clipped) {
+			ovl_kept_ms = k_uptime_get_32();
+		}
+		if (got == 0U) {
+			memcpy(peak, psd, sizeof(peak));
+		} else {
+			for (unsigned int k = 0; k < NFFT; k++) {
+				peak[k] = MAX(peak[k], psd[k]);
+			}
+		}
+		got++;
+	}
+	return segments;
 }
 
 /*
@@ -2160,19 +2203,9 @@ static int capture_sweep(void)
 		if (ret != 0 && ret != -ERANGE) {
 			continue;
 		}
-		for (unsigned int b = 0; b < bursts; b++) {
-			ret = capture_psd_n(SWEEP_SAMPLES);
-			if (ret < 0) {
-				return ret;
-			}
-			segments = ret;
-			if (b == 0U) {
-				memcpy(peak, psd, sizeof(peak));
-			} else {
-				for (unsigned int k = 0; k < NFFT; k++) {
-					peak[k] = MAX(peak[k], psd[k]);
-				}
-			}
+		segments = peak_bursts(bursts, SWEEP_SAMPLES);
+		if (segments < 0) {
+			return segments;
 		}
 		memcpy(psd, peak, sizeof(psd));
 		if (st.flat) {
@@ -2217,22 +2250,10 @@ static int capture_row(void)
 {
 	/* Zoomed in, each of the zoom rows per redraw takes its share of the peak bursts. */
 	unsigned int bursts = MAX((unsigned int)st.peak / (unsigned int)st.zoom, 1U);
-	int segments = 0;
+	int segments = peak_bursts(bursts, SAMPLES);
 
-	for (unsigned int n = 0; n < bursts; n++) {
-		int ret = capture_psd();
-
-		if (ret < 0) {
-			return ret;
-		}
-		segments = ret;
-		if (n == 0U) {
-			memcpy(peak, psd, sizeof(peak));
-		} else {
-			for (unsigned int k = 0; k < NFFT; k++) {
-				peak[k] = MAX(peak[k], psd[k]);
-			}
-		}
+	if (segments < 0) {
+		return segments;
 	}
 	memcpy(psd, peak, sizeof(psd));
 
@@ -2340,12 +2361,13 @@ static uint32_t loop_max_ms;
 static void print_status(void)
 {
 	con_printf("stat lo %d lo_khz %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
-	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u flat %d retakes %u clips %u ovl %d\n",
+	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u flat %d retakes %u clips %u kept %u ovl %d\n",
 	       st.lo_mhz, lo_khz(), st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
 	       st.width_filter, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
 	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.region_us ? "us" : "eu", st.orient, st.auto_rotate,
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
-	       (unsigned int)loop_max_ms, st.flat, (unsigned int)gain_retakes, (unsigned int)clip_retakes, overloaded());
+	       (unsigned int)loop_max_ms, st.flat, (unsigned int)gain_retakes, (unsigned int)clip_retakes, (unsigned int)clip_kept,
+	       overloaded());
 	loop_max_ms = 0U;
 
 }

@@ -73,11 +73,14 @@ word, as `ESPARGOS found <https://espargos.net/espsdr/>`_). A burst taken at ano
 than the one set, or with the AGC one where it changed part way (about 30 a second at
 2440 MHz), is taken again, up to twice (``retakes`` in ``$status``); at a fixed gain none
 has needed it, the gain being set before every capture. A burst where a sample hit full scale
-is taken again the same way: the ADC clipped, which splatters a bright line across the whole
-row. Clipping comes from single strong packets (15 to 25 us of a burst, seldom two bursts in a
-row), so the next burst is usually clean: at gain 70 the rows lifted more than 10 dB across
-the span fell from 10% to 3%. ``OVL`` still shows; ``c`` (``C`` in the header) or
-``$clip keep`` keeps them, to compare.
+(the ADC clipped, which splatters a bright line across the whole row) is left out of the row's
+peak hold, and another taken in its place, up to two a row. Clipping comes from single strong
+packets (15 to 25 us of a burst); taken again at once, the burst mostly fell in the same
+packet, but a few ms later in the row it is usually clean: at gain 70, with a busy transmitter
+close by, the rows lifted more than 10 dB across the span fell from 10% to 3%, and the
+clipped bursts still kept from 9 a second to 2. ``OVL`` shows in yellow when one was left
+out, in red when one was kept (lower the gain with ``n``). ``c`` (``C`` in the header) or
+``$clip keep`` keeps them all, to compare; ``$status`` counts ``clips`` left out and ``kept``.
 
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
 FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. The display
