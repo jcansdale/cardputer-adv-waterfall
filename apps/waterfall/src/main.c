@@ -486,7 +486,7 @@ static void draw_header(void)
 	char secs[16];
 
 	fmt_secs(secs, sizeof(secs), screen_s());
-	snprintf(line, sizeof(line), "%4d.%03d%s %2dM %-4s %c%c G:%s %c%d/%d %s", st.view_khz / 1000,
+	snprintf(line, sizeof(line), "%4d.%03d%s%4dM %-4s %c%c G:%s %c%d/%d %s", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, secs,
 		 st.width_filter ? 'X' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
 		 (int)st.range_db, st.region_us ? "US" : "EU");
@@ -1176,12 +1176,12 @@ static void side_header(void)
 	char secs[16];
 
 	fmt_secs(secs, sizeof(secs), screen_s());
-	snprintf(text, sizeof(text), "%d.%03d%s %dM %s %c%c", st.view_khz / 1000, st.view_khz % 1000,
-		 st.tune_warn ? "!" : " ", span_khz() / 1000, secs, st.width_filter ? 'X' : ' ',
-		 st.flat ? 'F' : ' ');
+	snprintf(text, sizeof(text), "%d.%03d%s %dM %s", st.view_khz / 1000, st.view_khz % 1000,
+		 st.tune_warn ? "!" : " ", span_khz() / 1000, secs);
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
-	snprintf(text, sizeof(text), "%s %c%d/%d %s", gain, st.auto_floor ? 'A' : 'L',
-		 (int)st.floor_db, (int)st.range_db, st.region_us ? "US" : "EU");
+	snprintf(text, sizeof(text), "%c%c %s %c%d/%d %s", st.width_filter ? 'X' : ' ',
+		 st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
+		 (int)st.range_db, st.region_us ? "US" : "EU");
 	draw_text_w(pbuf, PH, 2, 11, text, RGB565(255, 255, 255));
 	blit_strip(0, P_HDR_H);
 }
@@ -2049,37 +2049,38 @@ static int peak_until(int64_t end_us, size_t samples)
 	return segments;
 }
 
-/*
- * A row's spacing in us: the budget while the rows keep within 15% of it (the measured
- * spacing jitters a little), or as measured when they can't keep up.
- */
+/* A row's spacing in us: the budget, or more when the rows can't keep to it. */
 static float row_period_us(void)
 {
-	float b = row_budget_us();
-
-	return t_period_us > 1.15f * b ? t_period_us : b;
+	return MAX(row_budget_us(), t_period_us);
 }
 
 /*
- * Seconds, the waterfall's rows (WF_H landscape, SIDE_COLS portrait), for the header: held
- * until it moves by 5% (a measured one wanders), at once when the budget does.
+ * The rows can't keep to the budget (the fewest bursts, or the drawing, take longer): '>'
+ * before the header's time. On at 15% slower, off under 10%, so it holds at one setting.
  */
-static float screen_s(void)
+static bool lagging(void)
 {
-	static float shown, budget;
-	float v = (float)(st.orient != ORIENT_LANDSCAPE ? SIDE_COLS : WF_H) * row_period_us() *
-		  1e-6f;
+	static bool lag;
+	float b = row_budget_us();
 
-	if (row_budget_us() != budget || fabsf(v - shown) > 0.05f * shown) {
-		budget = row_budget_us();
-		shown = v;
-	}
-	return shown;
+	lag = lag ? t_period_us > 1.10f * b : t_period_us > 1.15f * b;
+	return lag;
 }
 
-/* "4.1s", "22s", "1.7m", "17m", "1.1h": @p s seconds in four characters. */
+/* Seconds the waterfall's rows (WF_H landscape, SIDE_COLS portrait) cover at the budget. */
+static float screen_s(void)
+{
+	return (float)(st.orient != ORIENT_LANDSCAPE ? SIDE_COLS : WF_H) * row_budget_us() * 1e-6f;
+}
+
+/* "4.1s", "22s", "1.7m", "17m", "1.1h": @p s seconds in four characters, '>' first if lagging. */
 static void fmt_secs(char *buf, size_t len, float s)
 {
+	if (lagging() && len > 1U) {
+		*buf++ = '>';
+		len--;
+	}
 	static const char unit[] = {'s', 'm', 'h'};
 	int u = s < 99.5f ? 0 : s < 5970.0f ? 1 : 2;
 

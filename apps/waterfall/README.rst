@@ -93,9 +93,11 @@ the fewest bursts take longer, the rows come as fast as they can, and below a fu
 time (4096 samples, about 2.9 ms) bursts are 2048 or 1024 samples, faster but noisier. A key
 or a console command ends a slow row early, so input never waits for one.
 
-The top line shows the view's centre frequency, span, the time the waterfall covers (``4.1s``;
-``m`` minutes, ``h`` hours: the speed's, or as measured when the rows can't keep up), ``X``
-and ``F`` when on, gain,
+The top line shows the view's centre frequency, span, the time the waterfall covers at the
+speed set (``4.0s``; ``m`` minutes, ``h`` hours; ``>4.0s`` when the rows can't keep up, the
+fewest bursts or the drawing taking longer: at the fastest settings, 2 MHz and the wide
+sweeps, where ``]`` makes it no faster), ``X`` and ``F`` when on (portrait: on the second
+line), gain,
 colour scale and band table (``EU`` or ``US``); under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
 fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
