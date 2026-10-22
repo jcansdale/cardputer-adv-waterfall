@@ -34,9 +34,10 @@ tuned to 2393), which is why 16 and 8 MHz are captured at 40 MS/s (39 kHz bins, 
 pixels' width at 8 MHz) and 4 and 2 MHz keep to the middle of their capture. At 40 MS/s the
 filters' slow roll-off past +-18 MHz does the same at the edges (a mast at 2675 MHz showed at
 2635 when tuned to 2655), so 40 MHz is captured at 80 MS/s; each pixel takes the strongest bin under it. Below 16 MHz, time resolution
-grows with the frequency resolution: the screen is redrawn after 2, 4 or 8 captured rows
-instead of one, each taking its share of the peak hold's bursts (8 at 16 MHz, 1 each at
-2 MHz), so the waterfall scrolls at about the same speed with more detail.
+grows with the frequency resolution: the peak hold's bursts are shared over 2, 4 or 8 rows
+instead of one (8 at 16 MHz, 1 each at 2 MHz), so the waterfall scrolls faster with more
+detail. Landscape redraws after every row, or after up to that many when they come quicker
+than 50 ms, so slowed right down it still moves a row at a time.
 Scrolling past the captured span retunes the radio, and the waterfall history is shifted and
 rescaled to stay lined up.
 
@@ -54,8 +55,8 @@ as elsewhere and the scroll speed falls smoothly with the width (rows a second):
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
 Span (MHz)  1000  640  320  160   80   40   16    8    4    2
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
-``P8``         4    7   12   15   18   22   21   41   68  109
-``P1``         4    7   12   19   25   37   37   62   84  109
+``P8``         4    7   12   15   18   22   22   41   67   92
+``P1``         4    7   12   19   25   37   38   63   84   92
 ==========  ====  ===  ===  ===  ===  ===  ===  ===  ===  ===
 
 At 320 MHz and wider a step gets one burst, so short bursts are often missed there.
@@ -81,7 +82,7 @@ of upright, so it does not flip back and forth), the BMI270 accelerometer switch
 layout laid out as the landscape one: the settings on two lines, the scale, and the trace with
 the Wi-Fi and Bluetooth LE labels on top, the waterfall under them with the newest row at the
 top. The panel scrolls the waterfall in hardware, so a new row costs one 135-pixel column
-instead of a redraw: about 35 rows a second at ``P8`` and 128 at ``P1``, against 21 and 37 in
+instead of a redraw: about 36 rows a second at ``P8`` and 149 at ``P1``, against 22 and 38 in
 landscape. The arrow keys follow the
 rotation (left and right still scroll, up and down still step the span as seen on the screen);
 ``v`` turns the automatic rotation off and on. The key list stays in landscape.
@@ -105,7 +106,7 @@ landscape (portrait is faster, the waterfall scrolling in hardware):
 Bursts       32   16    8    4    2    1
 ==========  ===  ===  ===  ===  ===  ===
 Landscape     8   14   21   28   33   37
-Portrait     10   19   35   59   93  128
+Portrait     10   19   36   59   93  149
 ==========  ===  ===  ===  ===  ===  ===
 
 The top line shows the view's centre frequency, span, the time the waterfall covers (``4.1s``:

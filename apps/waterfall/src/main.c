@@ -97,6 +97,7 @@ SYS_INIT(usj_phy_select, PRE_KERNEL_1, 0);
  * at once.
  */
 #define FRAME_MS 66U
+#define LAND_MS  50U
 
 /*
  * One ladder of screen spans for the zoom keys: each takes the narrowest sample rate that
@@ -1974,9 +1975,8 @@ static float screen_s(void)
 	} else {
 		unsigned int b = MAX((unsigned int)st.peak / (unsigned int)st.zoom, 1U);
 
-		pass_us = (float)st.zoom * ((float)b * t_burst_us[rate_i()] + t_row_us) +
-			  t_pass_us[portrait];
-		per_pass = (float)st.zoom;
+		pass_us = (float)b * t_burst_us[rate_i()] + t_row_us + t_pass_us[portrait];
+		per_pass = 1.0f;
 	}
 	return rows * pass_us / per_pass * 1e-6f;
 }
@@ -2625,11 +2625,12 @@ int main(void)
 		if (st.dirty_radio) {
 			apply_radio();
 		}
-		/* Zoomed in, zoom captures per redraw: time resolution grows with frequency's. */
+		/* Zoomed in, P is shared over zoom rows: time resolution grows with frequency's. */
 		ret = 0;
 		uint32_t rows_cyc = 0;
 
-		for (int n = 0; n < st.zoom && ret == 0; n++) {
+		/* One row a pass: zoomed in and slowed down, the redraw follows each (below). */
+		for (int n = 0; n < 1 && ret == 0; n++) {
 			bool sw = sweeping();
 			uint32_t c0 = k_cycle_get_32();
 
@@ -2671,7 +2672,17 @@ int main(void)
 		}
 		loop_max_ms = MAX(loop_max_ms, now - loop_ms);
 		loop_ms = now;
-		bool draw = input || st.orient == ORIENT_LANDSCAPE || now - last_draw_ms >= FRAME_MS;
+		/*
+		 * Landscape redraws after each row, or zoomed in after the zoom's rows when they come
+		 * quicker than LAND_MS (2 to 8 rows a redraw, the screen keeping up), so a slow row
+		 * moves the waterfall one row, not eight at once.
+		 */
+		static unsigned int land_rows;
+
+		land_rows++;
+		bool draw = input || now - last_draw_ms >= FRAME_MS ||
+			    (st.orient == ORIENT_LANDSCAPE &&
+			     (land_rows >= (unsigned int)st.zoom || now - last_draw_ms >= LAND_MS));
 
 		if (st.shot_req && st.screen) {
 			/* Everything redrawn, each write also to the host, then the layout. */
@@ -2695,6 +2706,7 @@ int main(void)
 		}
 		if (draw) {
 			last_draw_ms = now;
+			land_rows = 0;
 		}
 		if (!draw) {
 			/* Drawn with the next frame. */
