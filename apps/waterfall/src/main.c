@@ -129,6 +129,8 @@ static const struct {
 };
 #define SPAN_HOME 6 /* 16 MHz */
 static bool sweeping(void);
+static float screen_s(void);
+static void fmt_secs(char *buf, size_t len, float s);
 /* Wi-Fi is bursty: with peak hold each row is the per-bin maximum over this many bursts. */
 #define PEAK_BURSTS 8 /* the default; p steps through 8, 4, 2, 1, 32, 16 */
 #define PEAK_MAX    32
@@ -308,6 +310,9 @@ static void build_palette(void)
 static void draw_text_w(uint16_t *buf, unsigned int stride, unsigned int x, unsigned int y,
 			const char *s, uint16_t color)
 {
+	/* The one lower case letter: seconds, an S reading as a 5 next to digits. */
+	static const uint8_t small_s[5] = {0x48, 0x54, 0x54, 0x54, 0x24};
+
 	for (; *s != '\0' && x + 5 <= stride; s++, x += 6) {
 		int ch = toupper((unsigned char)*s);
 
@@ -315,7 +320,7 @@ static void draw_text_w(uint16_t *buf, unsigned int stride, unsigned int x, unsi
 			ch = '?';
 		}
 		for (unsigned int col = 0; col < 5; col++) {
-			uint8_t bits = font5x7[ch - 0x20][col];
+			uint8_t bits = *s == 's' ? small_s[col] : font5x7[ch - 0x20][col];
 
 			for (unsigned int row = 0; row < 7; row++) {
 				if (bits & BIT(row)) {
@@ -463,7 +468,7 @@ static void follow_view(void)
 
 static void draw_header(void)
 {
-	char line[48];
+	char line[80];
 	char gain[8];
 	uint16_t bg = RGB565(16, 16, 40), fg = RGB565(255, 255, 255);
 
@@ -472,8 +477,11 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d %s", st.view_khz / 1000,
-		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
+	char secs[16];
+
+	fmt_secs(secs, sizeof(secs), screen_s());
+	snprintf(line, sizeof(line), "%4d.%03d%s %2dM %-4s %c%c G:%s %c%d/%d %s", st.view_khz / 1000,
+		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, secs,
 		 st.width_filter ? 'X' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
 		 (int)st.range_db, st.region_us ? "US" : "EU");
 	if (!st.screen) {
@@ -1149,7 +1157,7 @@ static void side_trace(void)
 /* The settings, two lines: the view and span, then the flags, gain and colour scale. */
 static void side_header(void)
 {
-	char text[32], gain[8];
+	char text[64], gain[8];
 
 	for (unsigned int k = 0; k < PH * P_HDR_H; k++) {
 		pbuf[k] = RGB565(16, 16, 40);
@@ -1159,8 +1167,11 @@ static void side_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "G:%d", st.gain);
 	}
-	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c%c", st.view_khz / 1000, st.view_khz % 1000,
-		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.width_filter ? 'X' : ' ',
+	char secs[16];
+
+	fmt_secs(secs, sizeof(secs), screen_s());
+	snprintf(text, sizeof(text), "%d.%03d%s %dM %s %c%c", st.view_khz / 1000, st.view_khz % 1000,
+		 st.tune_warn ? "!" : " ", span_khz() / 1000, secs, st.width_filter ? 'X' : ' ',
 		 st.flat ? 'F' : ' ');
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
 	snprintf(text, sizeof(text), "%s %c%d/%d %s", gain, st.auto_floor ? 'A' : 'L',
@@ -1864,7 +1875,7 @@ static void fft_check(void)
 		k_cyc_to_us_floor32(t_c), (double)(err / top), use_dsp ? "esp-dsp" : "C");
 }
 
-static int capture_psd_n(size_t count)
+static int capture_psd_once(size_t count)
 {
 	struct esp_sdr_rx_burst b;
 	unsigned int segments;
@@ -1913,6 +1924,73 @@ static int capture_psd_n(size_t count)
 		}
 	}
 	return (int)segments;
+}
+
+/*
+ * The time a screenful of waterfall covers, predicted from the settings (P, span, zoom,
+ * layout) and the parts' times, measured as the app runs (smoothed): a burst at each rate,
+ * a row's work besides its bursts, a sweep step's (the retune, about 1 ms, among it), and
+ * a redraw's (everything else in a pass of the main loop: landscape redraws it all).
+ */
+static float t_burst_us[3] = {2900.0f, 2900.0f, 2900.0f}; /* 80, 40, 16 MS/s */
+static float t_row_us = 1500.0f, t_step_us = 2500.0f, t_pass_us[2] = {20000.0f, 3000.0f};
+static uint32_t burst_cyc; /* bursts' cycles since the row began */
+
+static inline void ema(float *v, float x)
+{
+	*v += 0.1f * (x - *v);
+}
+
+static int rate_i(void)
+{
+	return st.rate == ESP_SDR_RATE_80MSPS ? 0 : st.rate == ESP_SDR_RATE_40MSPS ? 1 : 2;
+}
+
+static int capture_psd_n(size_t count)
+{
+	uint32_t c0 = k_cycle_get_32();
+	int ret = capture_psd_once(count);
+	uint32_t dc = k_cycle_get_32() - c0;
+
+	if (ret >= 0) {
+		burst_cyc += dc;
+		ema(&t_burst_us[rate_i()], (float)k_cyc_to_us_floor32(dc));
+	}
+	return ret;
+}
+
+/* Seconds, the waterfall's rows (WF_H landscape, SIDE_COLS portrait) at the settings now. */
+static float screen_s(void)
+{
+	bool portrait = st.orient != ORIENT_LANDSCAPE;
+	float rows = (float)(portrait ? SIDE_COLS : WF_H), pass_us, per_pass;
+
+	if (sweeping()) {
+		int n = DIV_ROUND_UP(span_khz(), 32000);
+		unsigned int b = DIV_ROUND_UP((unsigned int)st.peak, (unsigned int)n);
+
+		pass_us = (float)n * ((float)b * t_burst_us[0] + t_step_us) + t_pass_us[portrait];
+		per_pass = 1.0f;
+	} else {
+		unsigned int b = MAX((unsigned int)st.peak / (unsigned int)st.zoom, 1U);
+
+		pass_us = (float)st.zoom * ((float)b * t_burst_us[rate_i()] + t_row_us) +
+			  t_pass_us[portrait];
+		per_pass = (float)st.zoom;
+	}
+	return rows * pass_us / per_pass * 1e-6f;
+}
+
+/* "4.1s", "22s": @p s seconds in four characters at most. */
+static void fmt_secs(char *buf, size_t len, float s)
+{
+	if (s < 9.95f) {
+		unsigned int t = (unsigned int)CLAMP(lroundf(s * 10.0f), 0L, 99L);
+
+		snprintf(buf, len, "%u.%us", t / 10U, t % 10U);
+	} else {
+		snprintf(buf, len, "%us", (unsigned int)CLAMP(lroundf(s), 0L, 999L));
+	}
 }
 
 static int capture_psd(void)
@@ -2549,8 +2627,26 @@ int main(void)
 		}
 		/* Zoomed in, zoom captures per redraw: time resolution grows with frequency's. */
 		ret = 0;
+		uint32_t rows_cyc = 0;
+
 		for (int n = 0; n < st.zoom && ret == 0; n++) {
-			ret = sweeping() ? capture_sweep() : capture_row();
+			bool sw = sweeping();
+			uint32_t c0 = k_cycle_get_32();
+
+			burst_cyc = 0;
+			ret = sw ? capture_sweep() : capture_row();
+			uint32_t dc = k_cycle_get_32() - c0;
+
+			rows_cyc += dc;
+			if (ret == 0 && dc > burst_cyc) {
+				float extra = (float)k_cyc_to_us_floor32(dc - burst_cyc);
+
+				if (sw) {
+					ema(&t_step_us, extra / (float)DIV_ROUND_UP(span_khz(), 32000));
+				} else {
+					ema(&t_row_us, extra);
+				}
+			}
 			rows++;
 			if (ret == 0 && st.orient != ORIENT_LANDSCAPE && st.screen && !st.help && scroll_on &&
 			    !st.side_dirty) {
@@ -2563,7 +2659,16 @@ int main(void)
 			continue;
 		}
 		uint32_t now = k_uptime_get_32();
+		static uint32_t pass_cyc0;
+		uint32_t pass_cyc = k_cycle_get_32() - pass_cyc0;
 
+		pass_cyc0 += pass_cyc;
+		/* The rest of the last pass (its drawing): only a steady one counts. */
+		if (!input && st.screen && !st.help && !st.dirty_radio && pass_cyc > rows_cyc &&
+		    k_cyc_to_ms_floor32(pass_cyc) < 500U) {
+			ema(&t_pass_us[st.orient != ORIENT_LANDSCAPE],
+			    (float)k_cyc_to_us_floor32(pass_cyc - rows_cyc));
+		}
 		loop_max_ms = MAX(loop_max_ms, now - loop_ms);
 		loop_ms = now;
 		bool draw = input || st.orient == ORIENT_LANDSCAPE || now - last_draw_ms >= FRAME_MS;

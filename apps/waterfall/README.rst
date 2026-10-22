@@ -93,7 +93,7 @@ rotation (left and right still scroll, up and down still step the span as seen o
    Held upright: the same view in portrait, with twice the history.
 
 Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by default
-each row is the per-bin maximum over 8 bursts (peak hold, ``P8`` in the header). ``[`` and
+each row is the per-bin maximum over 8 bursts (peak hold, ``P8``: ``peak`` in ``$status``). ``[`` and
 ``]`` set the speed: ``]`` halves the bursts per redraw, down to 1 (one burst's plain
 average), ``[`` doubles them, up to 32. Zoomed in, a redraw's bursts are shared over its 2, 4
 or 8 rows (``P8`` at 2 MHz: 8 rows of one burst each). Fewer bursts scroll faster but miss more of short
@@ -107,7 +107,9 @@ Landscape     8   14   21   28   33   37
 Portrait     10   19   35   59   93  128
 ==========  ===  ===  ===  ===  ===  ===
 
-The top line shows the view's centre frequency, span, peak hold, ``X`` and ``F`` when on, gain,
+The top line shows the view's centre frequency, span, the time the waterfall covers (``4.1s``:
+predicted from the settings and the parts' times as measured, so it changes as soon as ``[``,
+``]`` or the span do), ``X`` and ``F`` when on, gain,
 colour scale and band table (``EU`` or ``US``); under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
 fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
