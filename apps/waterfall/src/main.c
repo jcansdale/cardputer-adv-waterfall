@@ -1994,12 +1994,17 @@ static int64_t row_begin(void)
 	int64_t t = now_us();
 	float budget = row_budget_us();
 
+	static unsigned int n; /* rows measured since the budget changed */
+
 	if (budget != last_budget) {
 		last_budget = budget;
 		t_period_us = budget; /* a new setting: measured afresh */
 		row_end_us = t;
+		n = 0;
 	} else if (last != 0 && !row_hurry) {
-		ema(&t_period_us, (float)(t - last));
+		/* A plain mean of the first rows (the first one tells), then smoothed. */
+		n = MIN(n + 1U, 10U);
+		t_period_us += ((float)(t - last) - t_period_us) / (float)n;
 	}
 	last = t;
 	if (row_hurry || row_end_us > t + (int64_t)budget) {
