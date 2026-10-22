@@ -471,10 +471,10 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d", st.view_khz / 1000,
+	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d %s", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
 		 st.width_filter ? 'X' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
-		 (int)st.range_db);
+		 (int)st.range_db, st.region_us ? "US" : "EU");
 	if (!st.screen) {
 		snprintf(line, sizeof(line), "SCREEN PAUSED BY HOST");
 	}
@@ -1162,8 +1162,8 @@ static void side_header(void)
 		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.width_filter ? 'X' : ' ',
 		 st.flat ? 'F' : ' ');
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
-	snprintf(text, sizeof(text), "%s %c%d/%d", gain, st.auto_floor ? 'A' : 'L',
-		 (int)st.floor_db, (int)st.range_db);
+	snprintf(text, sizeof(text), "%s %c%d/%d %s", gain, st.auto_floor ? 'A' : 'L',
+		 (int)st.floor_db, (int)st.range_db, st.region_us ? "US" : "EU");
 	draw_text_w(pbuf, PH, 2, 11, text, RGB565(255, 255, 255));
 	blit_strip(0, P_HDR_H);
 }

@@ -106,7 +106,8 @@ Landscape     8   14   21   28   33   37
 Portrait     10   19   35   59   93  128
 ==========  ===  ===  ===  ===  ===  ===
 
-The top line shows the view's centre frequency, span, gain and colour scale; under
+The top line shows the view's centre frequency, span, peak hold, ``X`` and ``F`` when on, gain,
+colour scale and band table (``EU`` or ``US``); under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
 fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
 which has a narrow artefact of its own (LO leakage, patched over, with a skirt of about
