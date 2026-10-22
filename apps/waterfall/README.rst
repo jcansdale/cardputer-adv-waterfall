@@ -68,20 +68,6 @@ At 320 MHz and wider a step gets one burst, so short bursts are often missed the
    The whole range swept, 1800 to 2800 MHz (1000 MHz span): the band labels on top (4G masts
    orange, users blue, TDD violet), Wi-Fi and Bluetooth around 2.4 GHz, 4G masts by 2.65 GHz.
 
-Each sample the radio dumps also carries the gain it was taken at (bits 26 to 20 of the
-word, as `ESPARGOS found <https://espargos.net/espsdr/>`_). A burst taken at another gain
-than the one set, or with the AGC one where it changed part way (about 30 a second at
-2440 MHz), is taken again, up to twice (``retakes`` in ``$status``); at a fixed gain none
-has needed it, the gain being set before every capture. A burst where a sample hit full scale
-(the ADC clipped, which splatters a bright line across the whole row) is left out of the row's
-peak hold, and another taken in its place, up to two a row. Clipping comes from single strong
-packets (15 to 25 us of a burst); taken again at once, the burst mostly fell in the same
-packet, but a few ms later in the row it is usually clean: at gain 70, with a busy transmitter
-close by, the rows lifted more than 10 dB across the span fell from 10% to 3%, and the
-clipped bursts still kept from 9 a second to 2. ``OVL`` shows in yellow when one was left
-out, in red when one was kept (lower the gain with ``n``). ``c`` (``C`` in the header) or
-``$clip keep`` keeps them all, to compare; ``$status`` counts ``clips`` left out and ``kept``.
-
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
 FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. The display
 runs at 80 MHz SPI (above the ST7789's rated 62.5 MHz writes, but clean here), so a whole
@@ -120,9 +106,8 @@ Landscape     8   14   21   28   33   37
 Portrait     10   19   35   59   93  128
 ==========  ===  ===  ===  ===  ===  ===
 
-The top line shows the view's centre frequency, span, peak hold, ``X``, ``F`` and ``C`` when on, gain,
-colour scale and band table (``EU`` or ``US``; ``OVL`` instead for a second after a sample hit
-full scale: the ADC clipped, a strong signal close by or too much gain, ``n`` lowers it); under
+The top line shows the view's centre frequency, span, peak hold, ``X`` and ``F`` when on, gain,
+colour scale and band table (``EU`` or ``US``); under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
 fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
 which has a narrow artefact of its own (LO leakage, patched over, with a skirt of about
@@ -232,7 +217,6 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``g``   AGC
 ``v``   automatic portrait layout when held upright on / off
 ``r``   band table: Europe/UK (at start) or US
-``c``   take bursts that clipped again (``C``, on at start) or keep them
 ======  ===========================================
 
 Wi-Fi channels 1 to 12 are always labelled at the top of the spectrum trace, each number
@@ -303,7 +287,6 @@ Command               Action
 ``$region eu|us``     which band table labels the bands and the number keys
 ``$post on|off``      ``$bins`` frames as drawn, instead of as captured
 ``$shot``             the screen as drawn, as frames (``wf_serial.py shot``)
-``$clip drop|keep``   bursts that clipped taken again (default) or kept
 ``$rotate <how>``     ``auto`` (the accelerometer), or fixed: ``land``, ``left`` or
                       ``right`` (that edge down, portrait)
 ====================  ===========================================================

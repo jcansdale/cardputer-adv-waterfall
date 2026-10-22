@@ -17,7 +17,6 @@
  *   - =   darker / brighter (floor +2 / -2 dB)    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  *   x     the receiver's own narrow lines cleared (width_filter()) on/off
- *   c     bursts that clipped taken again (clip_drop) on/off
  *   r     band labels and number keys: Europe/UK or US
  *   v     auto-rotate on/off: held upright, the portrait layout, scrolled by the panel
  *
@@ -163,9 +162,6 @@ static float dsp_w[NFFT] __aligned(16); /* cos, sin of tau i / NFFT, i bit rever
 static uint16_t rev[NFFT];
 static bool use_dsp;
 static void flat_set(bool on);
-static bool overloaded(void);
-static uint16_t ovl_color(void);
-static bool clip_drop = true; /* bursts that clipped taken again (c, $clip) */
 static void shot_rect(unsigned int x, unsigned int y, unsigned int w, unsigned int h,
 		      const uint16_t *buf);
 static float window_gain;
@@ -475,10 +471,10 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c%c G:%s %c%d/%d %s", st.view_khz / 1000,
+	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d %s", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
-		 st.width_filter ? 'X' : ' ', st.flat ? 'F' : ' ', clip_drop ? 'C' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
-		 (int)st.range_db, overloaded() ? "OVL" : st.region_us ? "US" : "EU");
+		 st.width_filter ? 'X' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
+		 (int)st.range_db, st.region_us ? "US" : "EU");
 	if (!st.screen) {
 		snprintf(line, sizeof(line), "SCREEN PAUSED BY HOST");
 	}
@@ -486,9 +482,6 @@ static void draw_header(void)
 		fb[k] = bg;
 	}
 	draw_text(fb, 2, 1, line, fg);
-	if (st.screen && overloaded() && strstr(line, "OVL") != NULL) {
-		draw_text(fb, 2 + 6 * (unsigned int)(strstr(line, "OVL") - line), 1, "OVL", ovl_color());
-	}
 	blit(0, HDR_H);
 }
 
@@ -823,7 +816,7 @@ static void draw_help(void)
 		"-  =   DARKER/BRIGHTER  A  AUTO",
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
-		"X  NARROW LINES  F FLAT  C CLIPS",
+		"X      NARROW LINES   F  FLAT",
 		"V      AUTO-ROTATE  R  EU/US BANDS",
 		"RED: TUNING CENTRE",
 		"YELLOW WI-FI 1-12  CYAN BLUETOOTH LE",
@@ -1165,18 +1158,13 @@ static void side_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "G:%d", st.gain);
 	}
-	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c%c%c", st.view_khz / 1000, st.view_khz % 1000,
+	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c%c", st.view_khz / 1000, st.view_khz % 1000,
 		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.width_filter ? 'X' : ' ',
-		 st.flat ? 'F' : ' ', clip_drop ? 'C' : ' ');
+		 st.flat ? 'F' : ' ');
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
 	snprintf(text, sizeof(text), "%s %c%d/%d %s", gain, st.auto_floor ? 'A' : 'L',
-		 (int)st.floor_db, (int)st.range_db,
-		 overloaded() ? "OVL" : st.region_us ? "US" : "EU");
+		 (int)st.floor_db, (int)st.range_db, st.region_us ? "US" : "EU");
 	draw_text_w(pbuf, PH, 2, 11, text, RGB565(255, 255, 255));
-	if (overloaded() && strstr(text, "OVL") != NULL) {
-		draw_text_w(pbuf, PH, 2 + 6 * (unsigned int)(strstr(text, "OVL") - text), 11, "OVL",
-			    ovl_color());
-	}
 	blit_strip(0, P_HDR_H);
 }
 
@@ -1550,9 +1538,6 @@ static void handle_key(char k)
 	case 'f':
 		flat_set(!st.flat);
 		return;
-	case 'c': /* bursts that clipped: taken again or kept */
-		clip_drop = !clip_drop;
-		return;
 	case 'w':
 		st.channels = !st.channels;
 		return;
@@ -1681,7 +1666,7 @@ static bool con_write(const void *data, size_t len)
 
 static void con_printf(const char *fmt, ...)
 {
-	static char line[512]; /* the status line passed 256 */
+	static char line[512]; /* the status line nears 256 */
 	va_list ap;
 	int n;
 
@@ -1876,78 +1861,15 @@ static void fft_check(void)
 		k_cyc_to_us_floor32(t_c), (double)(err / top), use_dsp ? "esp-dsp" : "C");
 }
 
-/*
- * Each dump word also carries the gain it was taken at, bits 26 to 20 (bit 27 flags the odd
- * sample, the modem's packet detector most likely, and 31 to 28 its state machine: neither
- * follows clipping). At a fixed gain it matched in every burst checked, but a burst taken
- * at another gain (or, with the AGC, one where it changed) would smear the row: taken again,
- * up to twice, then kept so the screen never stalls. A sample at full scale (+-511) means the
- * ADC clipped, which splatters across the whole span, a bright line through the row: such a
- * burst is left out of the row's peak hold for another, a few ms later (taken again at once
- * it mostly fell in the same strong packet: a third were kept), up to CLIP_EXTRA a row
- * (peak_bursts()). OVL in the header: yellow when one was left out, red when one was kept.
- */
-#define CLIP_EXTRA 2
-#define BURST_TRIES 3
-#define OVL_MS      1000U
-static uint32_t gain_retakes, clip_retakes, clip_kept, ovl_ms, ovl_kept_ms;
-static bool last_clipped; /* the last capture_psd_n()'s burst hit full scale */
-
-/* OVL yellow: clipping seen, the burst taken again; red: a burst that clipped was kept. */
-static uint16_t ovl_color(void)
-{
-	return ovl_kept_ms != 0U && k_uptime_get_32() - ovl_kept_ms < OVL_MS ? RGB565(255, 60, 60)
-									    : RGB565(255, 220, 0);
-}
-
-static bool overloaded(void)
-{
-	return ovl_ms != 0U && k_uptime_get_32() - ovl_ms < OVL_MS;
-}
-
-static inline unsigned int word_gain(uint32_t w)
-{
-	return (w >> 20) & 0x7fU;
-}
-
-static bool burst_gain_ok(const struct esp_sdr_rx_burst *b)
-{
-	unsigned int g0 = word_gain(b->words[0]), g1 = word_gain(b->words[b->count - 1U]);
-
-	return st.gain == ESP_SDR_RX_GAIN_AUTO ? g0 == g1
-						: g0 == (unsigned int)st.gain && g1 == g0;
-}
-
-static bool burst_clipped(const struct esp_sdr_rx_burst *b)
-{
-	for (size_t j = 0; j < b->count; j++) {
-		if (abs(esp_sdr_rx_i(b->words[j])) >= 511 || abs(esp_sdr_rx_q(b->words[j])) >= 511) {
-			return true;
-		}
-	}
-	return false;
-}
-
 static int capture_psd_n(size_t count)
 {
 	struct esp_sdr_rx_burst b;
 	unsigned int segments;
 	float dc_i = 0.0f, dc_q = 0.0f;
-	int ret;
+	int ret = esp_sdr_rx_capture(st.rate, count, &b);
 
-	for (int t = 0;; t++) {
-		ret = esp_sdr_rx_capture(st.rate, count, &b);
-		if (ret != 0) {
-			return ret;
-		}
-		if (b.count == 0U || burst_gain_ok(&b) || t == BURST_TRIES - 1) {
-			break;
-		}
-		gain_retakes++;
-	}
-	last_clipped = b.count > 0U && burst_clipped(&b);
-	if (last_clipped) {
-		ovl_ms = k_uptime_get_32();
+	if (ret != 0) {
+		return ret;
 	}
 	if (st.iq_left != 0) {
 		send_iq(&b);
@@ -1990,40 +1912,9 @@ static int capture_psd_n(size_t count)
 	return (int)segments;
 }
 
-/* @p bursts bursts' per-bin maximum into peak[], those that clipped left out (clip_drop). */
-static int peak_bursts(unsigned int bursts, size_t samples)
+static int capture_psd(void)
 {
-	unsigned int got = 0, extra = 0;
-	int segments = 0;
-
-	while (got < bursts) {
-		int ret = capture_psd_n(samples);
-
-		if (ret < 0) {
-			return ret;
-		}
-		segments = ret;
-		if (last_clipped && clip_drop) {
-			if (extra < CLIP_EXTRA) {
-				extra++;
-				clip_retakes++;
-				continue;
-			}
-			ovl_kept_ms = k_uptime_get_32();
-			clip_kept++;
-		} else if (last_clipped) {
-			ovl_kept_ms = k_uptime_get_32();
-		}
-		if (got == 0U) {
-			memcpy(peak, psd, sizeof(peak));
-		} else {
-			for (unsigned int k = 0; k < NFFT; k++) {
-				peak[k] = MAX(peak[k], psd[k]);
-			}
-		}
-		got++;
-	}
-	return segments;
+	return capture_psd_n(SAMPLES);
 }
 
 /*
@@ -2203,9 +2094,19 @@ static int capture_sweep(void)
 		if (ret != 0 && ret != -ERANGE) {
 			continue;
 		}
-		segments = peak_bursts(bursts, SWEEP_SAMPLES);
-		if (segments < 0) {
-			return segments;
+		for (unsigned int b = 0; b < bursts; b++) {
+			ret = capture_psd_n(SWEEP_SAMPLES);
+			if (ret < 0) {
+				return ret;
+			}
+			segments = ret;
+			if (b == 0U) {
+				memcpy(peak, psd, sizeof(peak));
+			} else {
+				for (unsigned int k = 0; k < NFFT; k++) {
+					peak[k] = MAX(peak[k], psd[k]);
+				}
+			}
 		}
 		memcpy(psd, peak, sizeof(psd));
 		if (st.flat) {
@@ -2250,10 +2151,22 @@ static int capture_row(void)
 {
 	/* Zoomed in, each of the zoom rows per redraw takes its share of the peak bursts. */
 	unsigned int bursts = MAX((unsigned int)st.peak / (unsigned int)st.zoom, 1U);
-	int segments = peak_bursts(bursts, SAMPLES);
+	int segments = 0;
 
-	if (segments < 0) {
-		return segments;
+	for (unsigned int n = 0; n < bursts; n++) {
+		int ret = capture_psd();
+
+		if (ret < 0) {
+			return ret;
+		}
+		segments = ret;
+		if (n == 0U) {
+			memcpy(peak, psd, sizeof(peak));
+		} else {
+			for (unsigned int k = 0; k < NFFT; k++) {
+				peak[k] = MAX(peak[k], psd[k]);
+			}
+		}
 	}
 	memcpy(psd, peak, sizeof(psd));
 
@@ -2361,13 +2274,12 @@ static uint32_t loop_max_ms;
 static void print_status(void)
 {
 	con_printf("stat lo %d lo_khz %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
-	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u flat %d retakes %u clips %u kept %u ovl %d\n",
+	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u flat %d\n",
 	       st.lo_mhz, lo_khz(), st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
 	       st.width_filter, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
 	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.region_us ? "us" : "eu", st.orient, st.auto_rotate,
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
-	       (unsigned int)loop_max_ms, st.flat, (unsigned int)gain_retakes, (unsigned int)clip_retakes, (unsigned int)clip_kept,
-	       overloaded());
+	       (unsigned int)loop_max_ms, st.flat);
 	loop_max_ms = 0U;
 
 }
@@ -2433,7 +2345,7 @@ static void handle_cmd(char *line)
 	} else if (strcmp(line, "help") == 0) {
 		con_printf("ok help status, bins [n|on|off], post on|off, iq [n|off], text on|off, "
 			   "screen on|off, rotate auto|land|left|right, "
-		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off, width <kHz> [dB], clip drop|keep, shot, flat on|off, region eu|us\n");
+		       "tune <kHz>, lo <MHz>, span <MHz>, gain <n|auto>, peak <1-32|on|off>, hide on|off, width <kHz> [dB], shot, flat on|off, region eu|us\n");
 	} else if (strcmp(line, "status") == 0) {
 		print_status();
 	} else if (strcmp(line, "bins") == 0 && parse_count(arg, &st.bins_left)) {
@@ -2534,9 +2446,6 @@ static void handle_cmd(char *line)
 		width_db = CLAMP(db, 1.0f, 20.0f);
 		con_printf("ok width %d %d.%d\n", width_khz, (int)width_db,
 			   (int)(10.0f * width_db) % 10);
-	} else if (strcmp(line, "clip") == 0 && (strcmp(arg, "drop") == 0 || strcmp(arg, "keep") == 0)) {
-		clip_drop = arg[0] == 'd';
-		con_printf("ok clip %s\n", arg);
 	} else if (strcmp(line, "shot") == 0) {
 		/* The screen as drawn, at the next redraw (shot_end()). */
 		st.shot_req = st.screen;
