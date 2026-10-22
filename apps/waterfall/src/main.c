@@ -13,7 +13,7 @@
  *   , /   scroll left / right        ; .   span 80/40/16/8/4/2 MHz narrower / wider
  *   h     back to 2440 MHz, 16 MHz span
  *   w     Wi-Fi channel overlay on/off
- *   [ ]   slower / faster: bursts per redraw (peak hold) 1 2 4 8 16 32, split over the
+ *   [ ]   slower / faster: bursts per redraw (peak hold) 1 2 4 ... 256, split over the
  *         zoom's rows
  *   - =   darker / brighter (floor +2 / -2 dB)    k l   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
@@ -133,7 +133,7 @@ static float screen_s(void);
 static void fmt_secs(char *buf, size_t len, float s);
 /* Wi-Fi is bursty: with peak hold each row is the per-bin maximum over this many bursts. */
 #define PEAK_BURSTS 8 /* the default; p steps through 8, 4, 2, 1, 32, 16 */
-#define PEAK_MAX    32
+#define PEAK_MAX    256 /* a sweep shares P over its steps: 1000 MHz is 32 */
 #define FULLSCALE 512.0f
 #define FLOOR_DB  (-150.0f)
 
@@ -1715,7 +1715,7 @@ static void frame_begin(uint8_t type, uint16_t count, uint32_t len, unsigned int
 		.lo_khz = (int32_t)sys_cpu_to_le32((uint32_t)lo_khz()),
 		.fs_hz = sys_cpu_to_le32(esp_sdr_rx_rate_hz(st.rate)),
 		.gain = (int16_t)sys_cpu_to_le16((uint16_t)st.gain),
-		.bursts = (uint8_t)bursts,
+		.bursts = (uint8_t)MIN(bursts, 255U),
 		.segments = (uint8_t)segments,
 		.len = sys_cpu_to_le32(len),
 	};

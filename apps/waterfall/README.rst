@@ -95,7 +95,8 @@ rotation (left and right still scroll, up and down still step the span as seen o
 Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by default
 each row is the per-bin maximum over 8 bursts (peak hold, ``P8``: ``peak`` in ``$status``). ``[`` and
 ``]`` set the speed: ``]`` halves the bursts per redraw, down to 1 (one burst's plain
-average), ``[`` doubles them, up to 32. Zoomed in, a redraw's bursts are shared over its 2, 4
+average), ``[`` doubles them, up to 256 (a sweep shares them over its steps, 32 at 1000 MHz:
+up to P32 one burst each). Zoomed in, a redraw's bursts are shared over its 2, 4
 or 8 rows (``P8`` at 2 MHz: 8 rows of one burst each). Fewer bursts scroll faster but miss more of short
 bursts; 16 and 32 catch more and hold more seconds of history. Rows a second at 16 MHz, in
 landscape (portrait is faster, the waterfall scrolling in hardware):
@@ -212,7 +213,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``l``   colour range +5 dB
 ``a``   automatic colour floor on / off
 ``w``   2.4 GHz Wi-Fi channel overlay on / off
-``[``   slower: twice the bursts per redraw (peak hold), up to 32 (8 at start)
+``[``   slower: twice the bursts per redraw (peak hold), up to 256 (8 at start)
 ``]``   faster: half the bursts, down to 1
 ``x``   clear narrow lines, the receiver's own among them (``X``, on at start)
 ``f``   flatten the receiver's own shape on / off (on at start)
@@ -284,7 +285,7 @@ Command               Action
 ``$lo <MHz>``         the LO alone, the view staying put when it fits
 ``$span <MHz>``       1000, 640, 320, 160, 80 (swept), 40, 16, 8, 4 or 2
 ``$gain <n|auto>``    fixed gain table index or AGC
-``$peak <n|on|off>``  bursts per row: 1, 2, 4, 8, 16 or 32 (on: 8, off: 1)
+``$peak <n|on|off>``  bursts per redraw: a power of 2, 1 to 256 (on: 8, off: 1)
 ``$hide on|off``      the width filter (``x``)
 ``$width <k> <dB>``   the width filter's widest line (kHz) and threshold (600 4)
 ``$flat on|off``      the receiver's shape divided out (display only)
