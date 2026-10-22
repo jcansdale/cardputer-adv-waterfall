@@ -68,6 +68,12 @@ At 320 MHz and wider a step gets one burst, so short bursts are often missed the
    The whole range swept, 1800 to 2800 MHz (1000 MHz span): the band labels on top (4G masts
    orange, users blue, TDD violet), Wi-Fi and Bluetooth around 2.4 GHz, 4G masts by 2.65 GHz.
 
+Each sample the radio dumps also carries the gain it was taken at (bits 26 to 20 of the
+word, as `ESPARGOS found <https://espargos.net/espsdr/>`_). A burst taken at another gain
+than the one set, or with the AGC one where it changed part way (about 30 a second at
+2440 MHz), is taken again, up to twice (``retakes`` in ``$status``); at a fixed gain none
+has needed it, the gain being set before every capture.
+
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
 FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. The display
 runs at 80 MHz SPI (above the ST7789's rated 62.5 MHz writes, but clean here), so a whole
@@ -107,7 +113,8 @@ Portrait     10   19   35   59   93  128
 ==========  ===  ===  ===  ===  ===  ===
 
 The top line shows the view's centre frequency, span, peak hold, ``X`` and ``F`` when on, gain,
-colour scale and band table (``EU`` or ``US``); under
+colour scale and band table (``EU`` or ``US``), and ``OVL`` for a second after a sample hit
+full scale (the ADC clipped: a strong signal close by, or too much gain; ``n`` lowers it); under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
 fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
 which has a narrow artefact of its own (LO leakage, patched over, with a skirt of about

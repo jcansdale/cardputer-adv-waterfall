@@ -162,6 +162,7 @@ static float dsp_w[NFFT] __aligned(16); /* cos, sin of tau i / NFFT, i bit rever
 static uint16_t rev[NFFT];
 static bool use_dsp;
 static void flat_set(bool on);
+static bool overloaded(void);
 static void shot_rect(unsigned int x, unsigned int y, unsigned int w, unsigned int h,
 		      const uint16_t *buf);
 static float window_gain;
@@ -471,10 +472,10 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d %s", st.view_khz / 1000,
+	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d %s%s", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
 		 st.width_filter ? 'X' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
-		 (int)st.range_db, st.region_us ? "US" : "EU");
+		 (int)st.range_db, st.region_us ? "US" : "EU", overloaded() ? " OVL" : "");
 	if (!st.screen) {
 		snprintf(line, sizeof(line), "SCREEN PAUSED BY HOST");
 	}
@@ -1162,8 +1163,9 @@ static void side_header(void)
 		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.width_filter ? 'X' : ' ',
 		 st.flat ? 'F' : ' ');
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
-	snprintf(text, sizeof(text), "%s %c%d/%d %s", gain, st.auto_floor ? 'A' : 'L',
-		 (int)st.floor_db, (int)st.range_db, st.region_us ? "US" : "EU");
+	snprintf(text, sizeof(text), "%s %c%d/%d %s%s", gain, st.auto_floor ? 'A' : 'L',
+		 (int)st.floor_db, (int)st.range_db, st.region_us ? "US" : "EU",
+		 overloaded() ? " OVL" : "");
 	draw_text_w(pbuf, PH, 2, 11, text, RGB565(255, 255, 255));
 	blit_strip(0, P_HDR_H);
 }
@@ -1861,22 +1863,66 @@ static void fft_check(void)
 		k_cyc_to_us_floor32(t_c), (double)(err / top), use_dsp ? "esp-dsp" : "C");
 }
 
+/*
+ * Each dump word also carries the gain it was taken at, bits 26 to 20 (bit 27 flags the odd
+ * sample, the modem's packet detector most likely, and 31 to 28 its state machine: neither
+ * follows clipping). At a fixed gain it matched in every burst checked, but a burst taken
+ * at another gain (or, with the AGC, one where it changed) would smear the row: taken again,
+ * up to twice, then kept so the screen never stalls. A sample at full scale (+-511) means the
+ * ADC clipped: OVL in the header (ovl_ms).
+ */
+#define BURST_TRIES 3
+#define OVL_MS      1000U
+static uint32_t gain_retakes, ovl_ms;
+
+static bool overloaded(void)
+{
+	return ovl_ms != 0U && k_uptime_get_32() - ovl_ms < OVL_MS;
+}
+
+static inline unsigned int word_gain(uint32_t w)
+{
+	return (w >> 20) & 0x7fU;
+}
+
+static bool burst_gain_ok(const struct esp_sdr_rx_burst *b)
+{
+	unsigned int g0 = word_gain(b->words[0]), g1 = word_gain(b->words[b->count - 1U]);
+
+	return st.gain == ESP_SDR_RX_GAIN_AUTO ? g0 == g1
+						: g0 == (unsigned int)st.gain && g1 == g0;
+}
+
 static int capture_psd_n(size_t count)
 {
 	struct esp_sdr_rx_burst b;
 	unsigned int segments;
 	float dc_i = 0.0f, dc_q = 0.0f;
-	int ret = esp_sdr_rx_capture(st.rate, count, &b);
+	int peak_iq = 0;
+	int ret;
 
-	if (ret != 0) {
-		return ret;
+	for (int t = 0;; t++) {
+		ret = esp_sdr_rx_capture(st.rate, count, &b);
+		if (ret != 0) {
+			return ret;
+		}
+		if (b.count == 0U || burst_gain_ok(&b) || t == BURST_TRIES - 1) {
+			break;
+		}
+		gain_retakes++;
 	}
 	if (st.iq_left != 0) {
 		send_iq(&b);
 	}
 	for (size_t j = 0; j < b.count; j++) {
-		dc_i += (float)esp_sdr_rx_i(b.words[j]);
-		dc_q += (float)esp_sdr_rx_q(b.words[j]);
+		int i = esp_sdr_rx_i(b.words[j]), q = esp_sdr_rx_q(b.words[j]);
+
+		dc_i += (float)i;
+		dc_q += (float)q;
+		peak_iq = MAX(peak_iq, MAX(abs(i), abs(q)));
+	}
+	if (peak_iq >= 511) {
+		ovl_ms = k_uptime_get_32();
 	}
 	dc_i /= (float)b.count;
 	dc_q /= (float)b.count;
@@ -2274,12 +2320,12 @@ static uint32_t loop_max_ms;
 static void print_status(void)
 {
 	con_printf("stat lo %d lo_khz %d view %d span %d rate %d zoom %d gain %d peak %d hide %d floor %d "
-	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u flat %d\n",
+	       "range %d nfft %u samples %u text %d screen %d bins %d iq %d region %s orient %d rotate %d acc %d %d %d loop_max %u flat %d retakes %u ovl %d\n",
 	       st.lo_mhz, lo_khz(), st.view_khz, span_khz(), fs_khz(), st.zoom, st.gain, st.peak,
 	       st.width_filter, (int)lroundf(st.floor_db), (int)lroundf(st.range_db), NFFT,
 	       SAMPLES, st.text, st.screen, st.bins_left, st.iq_left, st.region_us ? "us" : "eu", st.orient, st.auto_rotate,
 	       (int)lroundf(acc[0] * 10.0f), (int)lroundf(acc[1] * 10.0f), (int)lroundf(acc[2] * 10.0f),
-	       (unsigned int)loop_max_ms, st.flat);
+	       (unsigned int)loop_max_ms, st.flat, (unsigned int)gain_retakes, overloaded());
 	loop_max_ms = 0U;
 
 }
