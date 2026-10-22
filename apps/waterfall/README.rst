@@ -14,6 +14,14 @@ ESP-SDR waterfall (M5Stack Cardputer-Adv)
 A receive-only spectrum and waterfall on the Cardputer-Adv's 240x135 display, in plain C:
 no MicroPython, no LVGL, no PSRAM (the Stamp-S3A has none).
 
+.. figure:: ../../apps/waterfall/doc/main.png
+   :alt: The waterfall at 2440 MHz, 16 MHz span: settings, frequency scale, Wi-Fi channels 6 to 8, trace and waterfall
+   :width: 480
+
+   2440 MHz, 16 MHz span (``wf_serial.py shot``): the settings on top, then the scale with
+   the tuning centre in red, Wi-Fi channel numbers, the trace and the waterfall, newest row on
+   top. The streaks are Wi-Fi bursts.
+
 Each row is a Welch average of Hann-windowed 1024-point FFTs over one 4096-sample burst at
 16, 40 or 80 MS/s. The up and down keys step the screen's span through 1000, 640, 320, 160,
 80, 40, 16, 8, 4 and 2 MHz (80 and wider sweep, below): 40 MHz captures at 80 MS/s, 16 and 8 MHz
@@ -53,6 +61,13 @@ Span (MHz)  1000  640  320  160   80   40   16    8    4    2
 At 320 MHz and wider a step gets one burst, so short bursts are often missed there.
 ``$settle`` changes the wait after each retune, for experiments.
 
+.. figure:: ../../apps/waterfall/doc/sweep.png
+   :alt: The whole range, 1800 to 2800 MHz, swept: band labels, Bluetooth labels and bursts
+   :width: 480
+
+   The whole range swept, 1800 to 2800 MHz (1000 MHz span): the band labels on top (4G masts
+   orange, users blue, TDD violet), Wi-Fi and Bluetooth around 2.4 GHz, 4G masts by 2.65 GHz.
+
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
 FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. The display
 runs at 80 MHz SPI (above the ST7789's rated 62.5 MHz writes, but clean here), so a whole
@@ -70,6 +85,12 @@ instead of a redraw: about 35 rows a second at ``P8`` and 128 at ``P1``, against
 landscape. The arrow keys follow the
 rotation (left and right still scroll, up and down still step the span as seen on the screen);
 ``v`` turns the automatic rotation off and on. The key list stays in landscape.
+
+.. figure:: ../../apps/waterfall/doc/portrait.png
+   :alt: The portrait layout: settings on two lines, scale, trace and a taller waterfall
+   :width: 270
+
+   Held upright: the same view in portrait, with twice the history.
 
 Wi-Fi is bursty and one burst is only 256 us (16 MS/s) to 51 us (80 MS/s), so by default
 each row is the per-bin maximum over 8 bursts (peak hold, ``P8`` in the header). ``p`` sets
@@ -111,6 +132,14 @@ tunings of the 40 MHz span it left 0.9 narrow peaks above 6 dB a view against 3.
 many as a learned per-tuning mask with a measured spur list did (since removed, with the
 magenta clock marks on the scale).
 
+.. figure:: ../../apps/waterfall/doc/line_filter.png
+   :alt: The 80 MHz sweep around 1840 MHz with the line filter on (left) and off (right): off shows several steady vertical lines
+   :width: 100%
+
+   ``x`` on (left) and off (right), the 80 MHz sweep on 1840 MHz: the receiver's own lines
+   (steady, vertical) go; the 4G masts' traffic stays. The ``!`` after the frequency: the
+   lowest step's LO is below the PLL's reliable range.
+
 Every capture also carries the receiver's own shape about the LO: the analog filters'
 roll-off (-1 dB at 15 MHz from the LO at 80 MS/s, -2.7 at 20), a broad bump of up to +3 dB
 within a few hundred kHz of the LO, and a gentle rise towards the edges at 40 and 16 MS/s.
@@ -121,6 +150,14 @@ above), built from those measurements (``src/flat_tables.h``, `Calibration`_). A
 and 42 the background is then flat within 0.4 dB (1 MHz averages) where it varied by about
 4 dB; at 70 within about 1 dB. In the sweeps the shape used to repeat at every 32 MHz step
 (a "mowed lawn" of about 3.7 dB); it is down to about 1.7, the noise of the measurement.
+
+.. figure:: ../../apps/waterfall/doc/flatten.png
+   :alt: The 40 MHz span at 2050 MHz with flattening on (left) and off (right): off shows a brighter band in the middle
+   :width: 100%
+
+   ``f`` on (left) and off (right), 40 MHz at 2050 MHz, a quiet stretch, the colour range
+   narrowed to 20 dB (``[``): without it the bump around the tuning centre shows as a brighter
+   band.
 
 The 40 MHz span stays one capture: swept in two halves, a burst that began or ended between
 them showed in only one, torn at the seam. Every span now stays inside the filters, so nothing
@@ -147,6 +184,12 @@ mode: power switch off, hold G0, power on.
 
 Keys
 ****
+
+.. figure:: ../../apps/waterfall/doc/help.png
+   :alt: The on-screen key list
+   :width: 480
+
+   Esc shows the key list on the screen.
 
 ======  ===========================================
 Key     Action

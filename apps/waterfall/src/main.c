@@ -765,8 +765,8 @@ static void draw_trace(void)
 				char num[4];
 				int lx;
 
-				if (ch_at[x] == 0) {
-					continue;
+				if (ch_at[x] == 0 || span_khz() > 160000) {
+					continue; /* wider, the channels are a pixel or two apart */
 				}
 				snprintf(num, sizeof(num), "%u", ch_at[x]);
 				lx = (int)x - (6 * (int)strlen(num) - 1) / 2; /* centred on the channel */
@@ -782,6 +782,8 @@ static void draw_trace(void)
 			draw_bands(fb, W, W, st.view_khz - span_khz() / 2, span_khz(), taken);
 		}
 		if (y0 == LABEL_H) {
+			int next = 0; /* labels that would overlap are skipped (wide spans) */
+
 			for (unsigned int x = 0; x < W; x++) {
 				char name[8];
 				int lx = (int)x - 8; /* "B37" is 17 pixels, centred */
@@ -791,7 +793,11 @@ static void draw_trace(void)
 				}
 				snprintf(name, sizeof(name), "B%u", ble_at[x]);
 				lx = CLAMP(lx, 0, (int)W - 17);
+				if (lx < next) {
+					continue;
+				}
 				draw_text(fb, (unsigned int)lx, 1, name, BLE_COLOR);
+				next = lx + 19;
 			}
 		}
 		blit(PSD_Y + y0, rows);
@@ -1110,7 +1116,7 @@ static void side_trace(void)
 		char num[4];
 		int len, lu;
 
-		if (wifi[u] == 0) {
+		if (wifi[u] == 0 || span_khz() > 160000) {
 			continue;
 		}
 		len = snprintf(num, sizeof(num), "%u", wifi[u]);
@@ -1123,13 +1129,15 @@ static void side_trace(void)
 			}
 		}
 	}
+	next = 0;
 	for (unsigned int u = 0; u < PH; u++) {
 		char name[8];
+		int lu = CLAMP((int)u - 8, 0, (int)PH - 17);
 
-		if (ble[u] != 0) {
+		if (ble[u] != 0 && lu >= next) {
 			snprintf(name, sizeof(name), "B%u", ble[u]);
-			draw_text_w(pbuf, PH, (unsigned int)CLAMP((int)u - 8, 0, (int)PH - 17),
-				    LABEL_H + 1U, name, BLE_COLOR);
+			draw_text_w(pbuf, PH, (unsigned int)lu, LABEL_H + 1U, name, BLE_COLOR);
+			next = lu + 19;
 		}
 	}
 	draw_bands(pbuf, PH, PH, st.view_khz - span_khz() / 2, span_khz(), taken);
