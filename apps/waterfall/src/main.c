@@ -17,6 +17,7 @@
  *   - =   darker / brighter (floor +2 / -2 dB)    [ ]   colour range -5 / +5 dB
  *   a     automatic floor on/off     n m   gain -1 / +1 (fixed)   g  gain auto
  *   x     the receiver's own narrow lines cleared (width_filter()) on/off
+ *   c     bursts that clipped taken again (clip_drop) on/off
  *   r     band labels and number keys: Europe/UK or US
  *   v     auto-rotate on/off: held upright, the portrait layout, scrolled by the panel
  *
@@ -163,6 +164,7 @@ static uint16_t rev[NFFT];
 static bool use_dsp;
 static void flat_set(bool on);
 static bool overloaded(void);
+static bool clip_drop = true; /* bursts that clipped taken again (c, $clip) */
 static void shot_rect(unsigned int x, unsigned int y, unsigned int w, unsigned int h,
 		      const uint16_t *buf);
 static float window_gain;
@@ -472,10 +474,10 @@ static void draw_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "%d", st.gain);
 	}
-	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c G:%s %c%d/%d %s%s", st.view_khz / 1000,
+	snprintf(line, sizeof(line), "%4d.%03d%s %2dM P%-2d%c%c%c G:%s %c%d/%d %s", st.view_khz / 1000,
 		 st.view_khz % 1000, st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak,
-		 st.width_filter ? 'X' : ' ', st.flat ? 'F' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
-		 (int)st.range_db, st.region_us ? "US" : "EU", overloaded() ? " OVL" : "");
+		 st.width_filter ? 'X' : ' ', st.flat ? 'F' : ' ', clip_drop ? 'C' : ' ', gain, st.auto_floor ? 'A' : 'L', (int)st.floor_db,
+		 (int)st.range_db, overloaded() ? "OVL" : st.region_us ? "US" : "EU");
 	if (!st.screen) {
 		snprintf(line, sizeof(line), "SCREEN PAUSED BY HOST");
 	}
@@ -817,7 +819,7 @@ static void draw_help(void)
 		"-  =   DARKER/BRIGHTER  A  AUTO",
 		"[  ]   COLOUR RANGE   W  CH. LINES",
 		"P      SPEED: PEAK OF 8,4,2,1,32,16",
-		"X      NARROW LINES   F  FLAT",
+		"X  NARROW LINES  F FLAT  C CLIPS",
 		"V      AUTO-ROTATE  R  EU/US BANDS",
 		"RED: TUNING CENTRE",
 		"YELLOW WI-FI 1-12  CYAN BLUETOOTH LE",
@@ -1159,13 +1161,13 @@ static void side_header(void)
 	} else {
 		snprintf(gain, sizeof(gain), "G:%d", st.gain);
 	}
-	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c%c", st.view_khz / 1000, st.view_khz % 1000,
+	snprintf(text, sizeof(text), "%d.%03d%s %dM P%d%c%c%c", st.view_khz / 1000, st.view_khz % 1000,
 		 st.tune_warn ? "!" : " ", span_khz() / 1000, st.peak, st.width_filter ? 'X' : ' ',
-		 st.flat ? 'F' : ' ');
+		 st.flat ? 'F' : ' ', clip_drop ? 'C' : ' ');
 	draw_text_w(pbuf, PH, 2, 1, text, RGB565(255, 255, 255));
-	snprintf(text, sizeof(text), "%s %c%d/%d %s%s", gain, st.auto_floor ? 'A' : 'L',
-		 (int)st.floor_db, (int)st.range_db, st.region_us ? "US" : "EU",
-		 overloaded() ? " OVL" : "");
+	snprintf(text, sizeof(text), "%s %c%d/%d %s", gain, st.auto_floor ? 'A' : 'L',
+		 (int)st.floor_db, (int)st.range_db,
+		 overloaded() ? "OVL" : st.region_us ? "US" : "EU");
 	draw_text_w(pbuf, PH, 2, 11, text, RGB565(255, 255, 255));
 	blit_strip(0, P_HDR_H);
 }
@@ -1540,6 +1542,9 @@ static void handle_key(char k)
 	case 'f':
 		flat_set(!st.flat);
 		return;
+	case 'c': /* bursts that clipped: taken again or kept */
+		clip_drop = !clip_drop;
+		return;
 	case 'w':
 		st.channels = !st.channels;
 		return;
@@ -1876,7 +1881,6 @@ static void fft_check(void)
 #define BURST_TRIES 3
 #define OVL_MS      1000U
 static uint32_t gain_retakes, clip_retakes, ovl_ms;
-static bool clip_drop = true; /* $clip drop|keep */
 
 static bool overloaded(void)
 {

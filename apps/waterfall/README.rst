@@ -76,7 +76,8 @@ has needed it, the gain being set before every capture. A burst where a sample h
 is taken again the same way: the ADC clipped, which splatters a bright line across the whole
 row. Clipping comes from single strong packets (15 to 25 us of a burst, seldom two bursts in a
 row), so the next burst is usually clean: at gain 70 the rows lifted more than 10 dB across
-the span fell from 10% to 3%. ``OVL`` still shows; ``$clip keep`` keeps them, to compare.
+the span fell from 10% to 3%. ``OVL`` still shows; ``c`` (``C`` in the header) or
+``$clip keep`` keeps them, to compare.
 
 The FFTs are esp-dsp's ESP32-S3 kernel (west project ``esp-dsp``, checked against the C
 FFT at boot): 0.4 ms for 1024 points, and a burst takes about 2.9 ms in all. The display
@@ -116,9 +117,9 @@ Landscape     8   14   21   28   33   37
 Portrait     10   19   35   59   93  128
 ==========  ===  ===  ===  ===  ===  ===
 
-The top line shows the view's centre frequency, span, peak hold, ``X`` and ``F`` when on, gain,
-colour scale and band table (``EU`` or ``US``), and ``OVL`` for a second after a sample hit
-full scale (the ADC clipped: a strong signal close by, or too much gain; ``n`` lowers it); under
+The top line shows the view's centre frequency, span, peak hold, ``X``, ``F`` and ``C`` when on, gain,
+colour scale and band table (``EU`` or ``US``; ``OVL`` instead for a second after a sample hit
+full scale: the ADC clipped, a strong signal close by or too much gain, ``n`` lowers it); under
 it a frequency scale with ticks (taller on whole MHz) and their values in MHz where they
 fit. A white mark under the scale is the view centre; a red one is where the radio is tuned,
 which has a narrow artefact of its own (LO leakage, patched over, with a skirt of about
@@ -228,6 +229,7 @@ Esc     show / hide the key list on screen (the `` ` `` key; any
 ``g``   AGC
 ``v``   automatic portrait layout when held upright on / off
 ``r``   band table: Europe/UK (at start) or US
+``c``   take bursts that clipped again (``C``, on at start) or keep them
 ======  ===========================================
 
 Wi-Fi channels 1 to 12 are always labelled at the top of the spectrum trace, each number
