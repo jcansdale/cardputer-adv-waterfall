@@ -321,6 +321,48 @@ Captures pause the screen unless ``--keep-screen`` is given. The tool opens the 
 and RTS raised: the USB Serial/JTAG resets the chip on RTS without DTR, which a plain open with
 both low passes through.
 
+Gain
+****
+
+The fixed gains (``n``, ``m``, ``$gain``) are indices 0 to 82 into the PHY's receive gain table,
+not dB. Measured on this board from what is on the air (receive only; ``tools/gaincal.py``,
+below), at 2412 and 2437 MHz, with one of the board's own clock harmonics (2400 and 2448 MHz,
+steady and peak held) as a level reference and the single-burst floor:
+
+.. figure:: ../../apps/waterfall/doc/gains.png
+   :alt: Clock line and floor against the gain index: rising about 1 dB a step, falling back at 7, 20, 30 and 47; the ambient Wi-Fi's margin over the floor stepping up at 30 and 47 and clipping from about 67
+   :width: 80%
+
+- **About 1 dB an index**, the same at both tunings: the floor lies on top of itself.
+- **Three segments, 0 to 29, 30 to 46 and 47 to 82.** At 30 and 47 the gain falls back (the floor
+  by 9 and 3 dB, the clock line by up to 12) while the ambient Wi-Fi's margin over the floor
+  steps up (at 2437 MHz about 6, 11 and 22 dB): the front end's gain goes up a stage and the
+  baseband's is reset. Within a segment an index adds baseband gain, which raises the signal and
+  the noise together. Smaller fallbacks at 7 and 20 (and stalls near 35 and 55) do the same on
+  a smaller scale.
+- **Below about 30 the ADC's own noise sets the floor** (an I/Q RMS of 1.5 to 5 LSB): weak signals
+  are lost, whatever the index.
+- **The most sensitive range is 48 to 64**, with the ambient Wi-Fi 22 to 29 dB (2437 MHz) and 35 to
+  44 dB (2412 MHz) over the floor; above that the margin falls again. A burst occasionally
+  clips from 53 and regularly from about 67 with an access point a few metres away.
+- **The default 42 is in the middle segment**, about 10 dB less sensitive than 48, with more
+  headroom.
+- The flattening's gain sets (``<= 35``, ``<= 55``, above) don't follow the segments; their
+  shape barely changes with gain, so this matters little.
+
+To measure another board or tuning (about 5 minutes; it puts the settings back after):
+
+.. code-block:: console
+
+   tools/gaincal.py measure -o g2437.npz
+   tools/gaincal.py measure -o g2412.npz --lo 2412
+   tools/gaincal.py plot g2437.npz g2412.npz --png gains.png
+
+``measure`` takes, at each index, the median of 12 single-burst spectra (the floor and DC), the
+median of 12 rows peak held over tens of bursts (bursty and steady signals) and 9 raw I/Q bursts
+(RMS, peak, clipped fraction). ``plot`` picks the steadiest clock harmonic in view (multiples
+of 8 MHz), prints the table and draws the figure.
+
 Calibration
 ***********
 
